@@ -3,3 +3,6 @@ dist
 .DS_Store
 *.local
 .claude/
+
+# Playwright MCP outputs (screenshots, snapshots, logs)
+.playwright-mcp/
