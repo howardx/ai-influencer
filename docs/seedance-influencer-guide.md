@@ -1,7 +1,5 @@
 # AI Influencer Seedance 2.0 — Ultimate Prompt Guide
-### Built for realism. Talking, movement, pauses, presence. Written by Dan Kieft.
-
-**© Dan Kieft. All rights reserved.**
+### Built for realism. Talking, movement, pauses, presence.
 
 Every rule in this guide came from something that broke in a real Seedance generation. Nothing theoretical.
 
@@ -998,4 +996,3 @@ Diagnose first. Fix the one broken thing. Don't rewrite untouched sections.
 
 *Built for AI influencer content on Seedance 2.0 / Higgsfield.*
 *Cross-referenced and merged from field iteration data across multiple full production cycles.*
-*© Dan Kieft. All rights reserved.*

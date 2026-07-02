@@ -12,7 +12,7 @@ You only install one thing — **Antigravity**. Everything else lives inside
 it. Just follow these steps in order.
 
 1. **Download the project.** Go to the
-   [GitHub page](https://github.com/DaanKieft/ai-influencer), click the green
+   [GitHub page](https://github.com/howardx/ai-influencer), click the green
    **Code** button → **Download ZIP**, then unzip it onto your Desktop.
 2. **Install Antigravity.** Search "Antigravity" on Google (or go to
    [antigravity.dev](https://antigravity.dev)) and install it like any app.
@@ -63,7 +63,3 @@ docs/              Prompt engineering reference docs
 The repo is Vercel-ready. Connect the GitHub repo at vercel.com → it
 auto-detects Vite + the `api/` folder and deploys in ~60 seconds. End
 users still bring their own Higgsfield account.
-
----
-
-Made by Dan Kieft.
