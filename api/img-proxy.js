@@ -6,17 +6,22 @@ const ALLOWED_HOSTS = [
   'files.higgsfield.ai',
   'oaidalleapiprodscus.blob.core.windows.net',
   'oaidallexprodscus.blob.core.windows.net',
+  // Higgsfield's CloudFront distribution for generated media. Pinned to the exact
+  // host (not the shared *.cloudfront.net suffix, which anyone can register on) to
+  // keep this from becoming an open proxy. If Higgsfield rotates or adds
+  // distributions, downloads 403 and the new host id gets added here.
+  'd8j0ntlcm91z4.cloudfront.net',
 ]
 
-function isSafeUrl(raw) {
+export function isSafeUrl(raw) {
   try {
-    const u = new URL(decodeURIComponent(raw))
+    const u = new URL(raw)
     if (u.protocol !== 'https:') return false
     return ALLOWED_HOSTS.some(h => u.hostname === h || u.hostname.endsWith('.' + h))
   } catch { return false }
 }
 
-function safeFilename(name) {
+export function safeFilename(name) {
   return (name || 'image.jpg')
     .replace(/[^a-zA-Z0-9._-]/g, '_')
     .slice(0, 128)
@@ -31,12 +36,15 @@ export default async function handler(req, res) {
     res.status(429).send('Too many requests — slow down a moment and try again.'); return
   }
 
+  // req.query values are already percent-decoded by Vercel, so `url` is the real
+  // URL — do NOT decodeURIComponent again or signed CDN URLs (literal %2F, %3D in
+  // the signature) get corrupted and a stray % throws.
   const { url, name } = req.query
   if (!url) { res.status(400).send('Missing url'); return }
   if (!isSafeUrl(url)) { res.status(403).send('URL not allowed'); return }
 
   try {
-    const upstream = await fetch(decodeURIComponent(url))
+    const upstream = await fetch(url)
     if (!upstream.ok) { res.status(upstream.status).send('Upstream error'); return }
 
     const ct = upstream.headers.get('content-type') || 'image/jpeg'

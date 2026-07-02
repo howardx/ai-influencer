@@ -8,7 +8,7 @@ Just type exactly what you see in the boxes.
 
 STEP 1 — DOWNLOAD THE PROJECT
 --------------------------------------------------
-1. Go to: https://github.com/DaanKieft/ai-influencer
+1. Go to: https://github.com/howardx/ai-influencer
 2. Click the green "Code" button
 3. Click "Download ZIP"
 4. Find the downloaded ZIP (usually in your Downloads folder)
