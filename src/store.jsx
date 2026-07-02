@@ -49,7 +49,7 @@ function readIds() {
 }
 
 function writeIds(ids) {
-  try { localStorage.setItem(IDS_KEY, JSON.stringify(ids)) } catch {}
+  try { localStorage.setItem(IDS_KEY, JSON.stringify(ids)); return true } catch { return false }
 }
 
 // Read the legacy single-key list (may still have data even after migration attempt)
@@ -468,9 +468,10 @@ export function StoreProvider({ children }) {
           for (const id of currentIds) {
             if (!allIds.includes(id)) allIds.push(id)
           }
-          writeIds(allIds)
+          const idsOk = writeIds(allIds)
+          let anyInfWritten = false
           for (const id of missingSeedIds) {
-            if (seeds.influencers[id]) writeInfluencer(seeds.influencers[id])
+            if (seeds.influencers[id] && writeInfluencer(seeds.influencers[id])) anyInfWritten = true
           }
 
           // Merge photo history — add seed photos that aren't already there
@@ -482,7 +483,10 @@ export function StoreProvider({ children }) {
             try { localStorage.setItem('photo_studio_history', JSON.stringify(merged)) } catch {}
           }
 
-          didWrite = true
+          // Only mark a write (which triggers a reload below) when the seeds
+          // actually persisted. If localStorage is full the writes silently fail;
+          // reloading anyway would re-detect the missing seeds and loop forever.
+          didWrite = idsOk && anyInfWritten
         }
 
         // Always patch existing influencers that are missing prompt or backstory from seeds
@@ -492,12 +496,12 @@ export function StoreProvider({ children }) {
           if (!existing) continue
           const needsPatch = (seedInf.prompt && !existing.prompt) || (seedInf.backstory && !existing.backstory)
           if (needsPatch) {
-            writeInfluencer({
+            const ok = writeInfluencer({
               ...existing,
               prompt: existing.prompt || seedInf.prompt || '',
               backstory: existing.backstory || seedInf.backstory || '',
             })
-            didWrite = true
+            if (ok) didWrite = true
           }
         }
 
@@ -529,8 +533,13 @@ export function StoreProvider({ children }) {
           setDealsData([...newDeals, ...patchedDeals])
         }
 
-        // Only reload when influencer data or photo history changed — boards/deals are handled above via state
-        if (didWrite) window.location.reload()
+        // Only reload when influencer data or photo history changed — boards/deals are handled above via state.
+        // One-shot guard: never reload more than once per session, so a spurious
+        // didWrite can't put the app in a reload loop.
+        if (didWrite && !sessionStorage.getItem('seeds_reloaded')) {
+          try { sessionStorage.setItem('seeds_reloaded', '1') } catch {}
+          window.location.reload()
+        }
       })
       .catch(e => console.warn('[seeds] failed to load:', e))
   }, []) // eslint-disable-line
