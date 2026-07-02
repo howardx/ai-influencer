@@ -15,7 +15,7 @@ const ALLOWED_HOSTS = [
 
 function isSafeUrl(raw) {
   try {
-    const u = new URL(decodeURIComponent(raw))
+    const u = new URL(raw)
     if (u.protocol !== 'https:') return false
     return ALLOWED_HOSTS.some(h => u.hostname === h || u.hostname.endsWith('.' + h))
   } catch { return false }
@@ -36,12 +36,15 @@ export default async function handler(req, res) {
     res.status(429).send('Too many requests — slow down a moment and try again.'); return
   }
 
+  // req.query values are already percent-decoded by Vercel, so `url` is the real
+  // URL — do NOT decodeURIComponent again or signed CDN URLs (literal %2F, %3D in
+  // the signature) get corrupted and a stray % throws.
   const { url, name } = req.query
   if (!url) { res.status(400).send('Missing url'); return }
   if (!isSafeUrl(url)) { res.status(403).send('URL not allowed'); return }
 
   try {
-    const upstream = await fetch(decodeURIComponent(url))
+    const upstream = await fetch(url)
     if (!upstream.ok) { res.status(upstream.status).send('Upstream error'); return }
 
     const ct = upstream.headers.get('content-type') || 'image/jpeg'
