@@ -1,5 +1,8 @@
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
+// Reuse the production guard so the dev mirror can't drift from it (an unguarded
+// dev proxy is an open SSRF against the developer's machine/network).
+import { isSafeUrl, safeFilename } from './api/img-proxy.js'
 
 // Local dev search proxy — mirrors api/search.js for Vercel production
 const searchPlugin = {
@@ -45,16 +48,21 @@ const imgProxyPlugin = {
   configureServer(server) {
     server.middlewares.use('/api/img-proxy', async (req, res) => {
       const qs = new URLSearchParams(req.url.split('?')[1] || '')
+      // URLSearchParams.get already percent-decodes — don't decode again (matches prod).
       const url = qs.get('url')
       const name = qs.get('name') || 'image.jpg'
       if (!url) { res.writeHead(400); res.end('Missing url'); return }
+      if (!isSafeUrl(url)) { res.writeHead(403); res.end('URL not allowed'); return }
       try {
-        const r = await fetch(decodeURIComponent(url))
+        const r = await fetch(url)
         const ct = r.headers.get('content-type') || 'image/jpeg'
+        if (!ct.startsWith('image/') && !ct.startsWith('video/')) {
+          res.writeHead(400); res.end('Not an image or video'); return
+        }
         const buf = await r.arrayBuffer()
         res.writeHead(r.status, {
           'Content-Type': ct,
-          'Content-Disposition': `attachment; filename="${decodeURIComponent(name)}"`,
+          'Content-Disposition': `attachment; filename="${safeFilename(name)}"`,
           'Access-Control-Allow-Origin': '*',
         })
         res.end(Buffer.from(buf))

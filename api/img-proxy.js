@@ -13,7 +13,7 @@ const ALLOWED_HOSTS = [
   'd8j0ntlcm91z4.cloudfront.net',
 ]
 
-function isSafeUrl(raw) {
+export function isSafeUrl(raw) {
   try {
     const u = new URL(raw)
     if (u.protocol !== 'https:') return false
@@ -21,7 +21,7 @@ function isSafeUrl(raw) {
   } catch { return false }
 }
 
-function safeFilename(name) {
+export function safeFilename(name) {
   return (name || 'image.jpg')
     .replace(/[^a-zA-Z0-9._-]/g, '_')
     .slice(0, 128)
