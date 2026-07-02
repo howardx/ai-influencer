@@ -31,7 +31,7 @@ account (OAuth, PKCE).
 | `src/utils/systemPrompt.js` | Prompt templates — poses, wardrobe library, vibe palettes, Soul vs GPT Image 2 variants |
 | `src/pages/Create.jsx` | Multi-step influencer creation wizard |
 | `src/pages/Influencers.jsx` | Influencer profile + Content Studio + Video Studio (very large — known structural debt) |
-| `api/hf/[...path].js` | Edge function that proxies all Higgsfield MCP traffic and forwards SSE streams |
+| `api/hfproxy.js` | Edge function that proxies all Higgsfield MCP traffic and forwards SSE streams. `/api/hf/*` is routed here by the `vercel.json` rewrite (sub-path passed as `__hfpath`); it enforces the path allowlist and rate limiting |
 | `api/claude.js` | Anthropic API proxy — caller supplies their own `x-api-key` |
 
 ## Deeper docs (read when relevant, not preloaded)
