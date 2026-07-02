@@ -1,4 +1,4 @@
-import { useState, useEffect, createContext, useContext } from 'react'
+import { useState, useEffect, useRef, createContext, useContext } from 'react'
 
 // Generic small-value localStorage hook (inspiration boards, brand deals, etc.)
 function useLocalStorage(key, initial) {
@@ -97,18 +97,35 @@ function useInfluencerStore(initial) {
     return legacy.length > 0 ? legacy : initial
   })
 
+  // Track the IDs this tab knew about on the previous render, so we can tell an
+  // influencer this tab explicitly deleted apart from one another open tab created.
+  const prevIdsRef = useRef(influencers.map(i => i.id))
+
   useEffect(() => {
     const ids = influencers.map(i => i.id)
-    writeIds(ids)
+    const ourSet = new Set(ids)
+
+    // IDs this tab removed since the last render (an explicit local deletion).
+    const removed = prevIdsRef.current.filter(id => !ourSet.has(id))
+    const removedSet = new Set(removed)
+
+    // Merge, don't clobber: another tab may have added influencers to the shared
+    // ID list since we last read it. Preserve those (unless we just deleted them)
+    // so writing our view never shrinks the list and drops another tab's work.
+    const foreignIds = (readIds() || []).filter(
+      id => !ourSet.has(id) && !removedSet.has(id)
+    )
+    writeIds([...ids, ...foreignIds])
+
     for (const inf of influencers) writeInfluencer(inf)
-    // Remove keys for deleted influencers
-    const idSet = new Set(ids)
-    for (const key of Object.keys(localStorage)) {
-      if (key.startsWith(INF_PREFIX)) {
-        const id = key.slice(INF_PREFIX.length)
-        if (!idSet.has(id)) try { localStorage.removeItem(key) } catch {}
-      }
+
+    // Only remove keys for influencers THIS tab explicitly deleted. Never delete
+    // a key we simply don't know about — it may belong to another open tab.
+    for (const id of removed) {
+      try { localStorage.removeItem(`${INF_PREFIX}${id}`) } catch {}
     }
+
+    prevIdsRef.current = ids
   }, [influencers])
 
   return [influencers, setInfluencers]
