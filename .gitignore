@@ -2,7 +2,7 @@ node_modules
 dist
 .DS_Store
 *.local
-.claude/
+.claude/settings.local.json
 
 # Playwright MCP outputs (screenshots, snapshots, logs)
 .playwright-mcp/

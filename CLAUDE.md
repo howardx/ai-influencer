@@ -34,6 +34,21 @@ account (OAuth, PKCE).
 | `api/hf/[...path].js` | Edge function that proxies all Higgsfield MCP traffic and forwards SSE streams |
 | `api/claude.js` | Anthropic API proxy — caller supplies their own `x-api-key` |
 
+## Deeper docs (read when relevant, not preloaded)
+
+- `docs/gpt-image-2-engine.md` — prompt engine for photorealistic
+  influencer images on GPT Image 2: skin-realism block,
+  anti-beauty-filter framing, sectioned prompt format.
+- `docs/photo-studio-influencer-guide.md` — reference-driven editing
+  with GPT Image 2 (`@image1` identity, `@image2` outfit); prompts stay
+  short and directive, never re-describe the refs.
+- `docs/seedance-influencer-guide.md` — Seedance 2.0 video prompt rules
+  (talking, movement, pauses, realism), distilled from real failures.
+
+Agent skills for Higgsfield workflows live in `.agents/skills/`
+(cross-tool location, pinned by `skills-lock.json`) and are symlinked at
+`.claude/skills` so Claude Code discovers them.
+
 ## Conventions
 
 - Inline styles with CSS variables (`var(--bg)`, `var(--text-primary)`).
