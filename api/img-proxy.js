@@ -6,6 +6,11 @@ const ALLOWED_HOSTS = [
   'files.higgsfield.ai',
   'oaidalleapiprodscus.blob.core.windows.net',
   'oaidallexprodscus.blob.core.windows.net',
+  // Higgsfield's CloudFront distribution for generated media. Pinned to the exact
+  // host (not the shared *.cloudfront.net suffix, which anyone can register on) to
+  // keep this from becoming an open proxy. If Higgsfield rotates or adds
+  // distributions, downloads 403 and the new host id gets added here.
+  'd8j0ntlcm91z4.cloudfront.net',
 ]
 
 function isSafeUrl(raw) {
