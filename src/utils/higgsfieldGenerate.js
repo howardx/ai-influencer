@@ -1,4 +1,5 @@
 import { getHFToken, refreshHFToken, disconnectHF } from './higgsfieldAuth'
+import { modelBaseParams, DEFAULT_VIDEO_MODEL } from './modelCaps'
 
 const MCP_URL = '/api/hf/mcp'
 const PENDING_KEY = 'hf_pending_gens'
@@ -108,64 +109,97 @@ export async function resumeVideoJob(jobIds, count, onProgress, onPartialResults
   return pollVideoJobs(jobIds, count, onProgress, onPartialResults, isCancelled)
 }
 
+// Transient upstream statuses — the proxy sets Retry-After on 429s. Retrying here,
+// at the shared fetch layer, protects every tool call (generation, polling,
+// uploads), not just the OAuth flow like the fetchWithRetry in higgsfieldAuth.
+//
+// A 429 is always safe to retry: the request was rejected before processing.
+// A 5xx is NOT — it can arrive after Higgsfield already accepted a tools/call,
+// so blindly retrying a generate submission would create a second job and burn
+// credits invisibly (we never learn the first job's ID). 5xx retries are
+// therefore limited to read-only / idempotent calls.
+const MCP_TRANSIENT_5XX = new Set([500, 502, 503, 504])
+const MCP_IDEMPOTENT_TOOLS = new Set(['job_status', 'job_display'])
+const MCP_FETCH_ATTEMPTS = 3
+
+function isIdempotentCall(body) {
+  if (body?.method === 'initialize') return true
+  if (body?.method === 'tools/call') return MCP_IDEMPOTENT_TOOLS.has(body?.params?.name)
+  return false
+}
+
 async function mcpPost(body, isRetry = false) {
-  const token = getHFToken()
-  const headers = {
-    'Content-Type': 'application/json',
-    'Accept': 'application/json, text/event-stream',
-    'Authorization': `Bearer ${token}`,
-  }
-  if (_sessionId) headers['Mcp-Session-Id'] = _sessionId
+  const payload = JSON.stringify(body)
 
-  const controller = new AbortController()
-  const timeout = setTimeout(() => controller.abort(), 30000)
-
-  let res
-  try {
-    res = await fetch(MCP_URL, { method: 'POST', headers, body: JSON.stringify(body), signal: controller.signal })
-  } catch (e) {
-    clearTimeout(timeout)
-    if (e.name === 'AbortError') throw new Error('Higgsfield timed out — your session may have expired. Reconnect in Settings.')
-    throw new Error('Connection error — check your internet connection or reconnect Higgsfield in Settings')
-  }
-
-  if (res.status === 401) {
-    clearTimeout(timeout)
-    if (isRetry) throw new Error('Higgsfield session expired — please reconnect in Settings')
-    // refreshHFToken throws a non-disconnecting "busy, try again" error on transient
-    // failures and disconnects only on a real auth rejection — let its message surface.
-    await refreshHFToken()
-    _sessionId = null // force new session with fresh token
-    return mcpPost(body, true)
-  }
-  if (!res.ok) {
-    clearTimeout(timeout)
-    const errText = await res.text().catch(() => '')
-    throw new Error(`Higgsfield API error ${res.status}: ${errText}`)
-  }
-
-  const sid = res.headers.get('Mcp-Session-Id')
-  if (sid) _sessionId = sid
-
-  const ct = res.headers.get('content-type') || ''
-  hflog('[HF] content-type:', ct)
-
-  // Keep the AbortController active through body reading — clearTimeout only in finally.
-  // parseSSEStream's while(true) read loop can hang indefinitely if the server sends
-  // 200 OK with an event-stream content-type but never emits any events.
-  try {
-    if (ct.includes('text/event-stream')) {
-      return await parseSSEStream(res, controller.signal)
+  for (let attempt = 0; ; attempt++) {
+    const headers = {
+      'Content-Type': 'application/json',
+      'Accept': 'application/json, text/event-stream',
+      'Authorization': `Bearer ${getHFToken()}`,
     }
-    const rawText = await res.text()
-    hflog('[HF] raw body:', rawText.slice(0, 600))
-    if (rawText.trimStart().startsWith('data:')) return parseSSEText(rawText)
-    try { return JSON.parse(rawText) } catch { return rawText }
-  } catch (e) {
-    if (e.name === 'AbortError') throw new Error('Higgsfield timed out — your session may have expired. Reconnect in Settings.')
-    throw e
-  } finally {
-    clearTimeout(timeout)
+    if (_sessionId) headers['Mcp-Session-Id'] = _sessionId
+
+    const controller = new AbortController()
+    const timeout = setTimeout(() => controller.abort(), 30000)
+
+    let res
+    try {
+      res = await fetch(MCP_URL, { method: 'POST', headers, body: payload, signal: controller.signal })
+    } catch (e) {
+      clearTimeout(timeout)
+      if (e.name === 'AbortError') throw new Error('Higgsfield timed out — your session may have expired. Reconnect in Settings.')
+      throw new Error('Connection error — check your internet connection or reconnect Higgsfield in Settings')
+    }
+
+    const retryable = res.status === 429 || (MCP_TRANSIENT_5XX.has(res.status) && isIdempotentCall(body))
+    if (retryable && attempt < MCP_FETCH_ATTEMPTS - 1) {
+      clearTimeout(timeout)
+      const ra = Number(res.headers.get('retry-after'))
+      const wait = Number.isFinite(ra) && ra > 0
+        ? Math.min(ra * 1000, 8000)
+        : 500 * 2 ** attempt + Math.floor(Math.random() * 400)
+      await new Promise(r => setTimeout(r, wait))
+      continue
+    }
+
+    if (res.status === 401) {
+      clearTimeout(timeout)
+      if (isRetry) throw new Error('Higgsfield session expired — please reconnect in Settings')
+      // refreshHFToken throws a non-disconnecting "busy, try again" error on transient
+      // failures and disconnects only on a real auth rejection — let its message surface.
+      await refreshHFToken()
+      _sessionId = null // force new session with fresh token
+      return mcpPost(body, true)
+    }
+    if (!res.ok) {
+      clearTimeout(timeout)
+      const errText = await res.text().catch(() => '')
+      throw new Error(`Higgsfield API error ${res.status}: ${errText}`)
+    }
+
+    const sid = res.headers.get('Mcp-Session-Id')
+    if (sid) _sessionId = sid
+
+    const ct = res.headers.get('content-type') || ''
+    hflog('[HF] content-type:', ct)
+
+    // Keep the AbortController active through body reading — clearTimeout only in finally.
+    // parseSSEStream's while(true) read loop can hang indefinitely if the server sends
+    // 200 OK with an event-stream content-type but never emits any events.
+    try {
+      if (ct.includes('text/event-stream')) {
+        return await parseSSEStream(res, controller.signal)
+      }
+      const rawText = await res.text()
+      hflog('[HF] raw body:', rawText.slice(0, 600))
+      if (rawText.trimStart().startsWith('data:')) return parseSSEText(rawText)
+      try { return JSON.parse(rawText) } catch { return rawText }
+    } catch (e) {
+      if (e.name === 'AbortError') throw new Error('Higgsfield timed out — your session may have expired. Reconnect in Settings.')
+      throw e
+    } finally {
+      clearTimeout(timeout)
+    }
   }
 }
 
@@ -341,77 +375,113 @@ function extractShareUrls(result) {
 }
 
 // True failure terminals — jobs that will never produce a URL
-const VIDEO_FAIL_TERMINAL = new Set(['failed', 'error', 'cancelled', 'rejected', 'nsfw', 'content_filtered', 'not_found'])
-// "Soft" terminals — job says done but URL may not be propagated yet; retry a few times
-const VIDEO_SOFT_TERMINAL = new Set(['completed', 'done'])
+const FAIL_TERMINAL = new Set(['failed', 'error', 'cancelled', 'rejected', 'nsfw', 'content_filtered', 'not_found'])
+// "Soft" terminals — job says done but the CDN URL may not be propagated yet; retry a few rounds
+const SOFT_TERMINAL = new Set(['completed', 'done'])
 
-async function pollVideoJobs(jobIds, total, onProgress, onPartialResults, isCancelled) {
+// ── Unified job-polling engine ───────────────────────────────────
+// One loop for every media type (images, videos, pose previews). Polls only
+// still-pending jobs, sequentially (parallel MCP calls conflict over the shared
+// session). Honors the server's poll_after_seconds guidance for the round delay,
+// gives soft-terminal jobs a bounded retry window before dropping them, and —
+// once at least one result is in hand — stops after `staleRounds` rounds with no
+// new delivery instead of re-polling stragglers up to the hard cap.
+// pollOne: async jobId => ({ url, shareUrl?, status, pollAfter? })
+// Returns { delivered: [{jobId, url, shareUrl}], pendingCount }
+async function pollJobs({ jobIds, total, pollOne, onDeliver = null, isCancelled = null, maxRounds = 60, intervalMs = 3000, staleRounds = null, softRetryLimit = 8, tag = 'HF' }) {
   const pending = new Set(jobIds)
-  const urls = []
-  const shareUrls = []
-  const softRetries = new Map() // jobId → count of rounds seen as soft-terminal with no URL
+  const delivered = []
+  const softRetries = new Map() // jobId → rounds seen as soft-terminal with no URL
+  let roundsSinceDelivery = 0
+  let nextDelayMs = intervalMs
 
-  for (let round = 0; round < 270; round++) { // 270 × 2s = 9 minutes max
+  for (let round = 0; round < maxRounds && pending.size > 0 && delivered.length < total; round++) {
     if (isCancelled?.()) throw new Error(CANCEL_MESSAGE)
-    if (round > 0) await new Promise(r => setTimeout(r, 2000))
+    if (round > 0) await new Promise(r => setTimeout(r, nextDelayMs))
     if (isCancelled?.()) throw new Error(CANCEL_MESSAGE)
+    nextDelayMs = intervalMs
+    let deliveredThisRound = false
 
     for (const jobId of [...pending]) {
       if (isCancelled?.()) throw new Error(CANCEL_MESSAGE)
       try {
-        const result = await callTool('job_status', { jobId })
-        const data = unwrapMCP(result)
-        if (round < 2) console.log(`[HF-VID] job_status ${jobId.slice(0, 8)}:`, JSON.stringify(data)?.slice(0, 400))
-
-        const item = Array.isArray(data?.results) ? data.results[0] : data
-        const resultsObj = Array.isArray(data?.results) ? item?.results : data?.results
-
-        const url = resultsObj?.rawUrl || resultsObj?.minUrl || item?.result_url || item?.url
-          || extractVideoUrls(result)[0] || null
-        const shareUrl = resultsObj?.shareUrl || resultsObj?.share_url || item?.shareUrl || item?.share_url
-          || extractShareUrls(result)[0] || null
-        const status = (item?.status || data?.status || '').toLowerCase()
-
+        const { url, shareUrl, status, pollAfter } = await pollOne(jobId)
+        if (Number.isFinite(pollAfter) && pollAfter > 0) {
+          nextDelayMs = Math.max(nextDelayMs, Math.min(pollAfter * 1000, 10000))
+        }
         if (url) {
           pending.delete(jobId)
           softRetries.delete(jobId)
-          if (!urls.includes(url)) {
-            urls.push(url)
-            if (shareUrl) shareUrls.push(shareUrl)
-            onProgress?.(Math.min(35 + (urls.length / total) * 60, 95))
-            onPartialResults?.(urls.slice(0, total))
+          if (!delivered.some(d => d.url === url)) {
+            delivered.push({ jobId, url, shareUrl })
+            deliveredThisRound = true
+            onDeliver?.(url, { jobId, shareUrl })
           }
-        } else if (VIDEO_FAIL_TERMINAL.has(status)) {
+        } else if (FAIL_TERMINAL.has(status)) {
           pending.delete(jobId)
-          console.warn('[HF-VID] job', jobId.slice(0, 8), 'failed, status:', status)
-        } else if (VIDEO_SOFT_TERMINAL.has(status)) {
-          // Job says completed but no URL yet — CDN propagation lag or format mismatch.
-          // Retry up to 8 more rounds (~16s) before giving up.
+          console.warn(`[${tag}] job ${jobId.slice(0, 8)} failed, status: ${status}`)
+        } else if (SOFT_TERMINAL.has(status)) {
           const retries = (softRetries.get(jobId) || 0) + 1
           softRetries.set(jobId, retries)
-          if (retries >= 8) {
+          if (retries >= softRetryLimit) {
             pending.delete(jobId)
-            console.warn('[HF-VID] job', jobId.slice(0, 8), 'completed but URL never appeared after retries')
-          } else {
-            console.log(`[HF-VID] job ${jobId.slice(0, 8)} soft-terminal retry ${retries}/8`)
+            console.warn(`[${tag}] job ${jobId.slice(0, 8)} completed but URL never appeared after ${retries} retries`)
           }
         }
       } catch (e) {
         if (isCancelError(e)) throw e
-        console.warn('[HF-VID] job_status error:', jobId.slice(0, 8), e.message)
+        console.warn(`[${tag}] poll error:`, jobId.slice(0, 8), e.message)
       }
     }
 
-    console.log(`[HF-VID] round ${round} → ${urls.length}/${total} URLs, ${pending.size} pending`)
-    if (urls.length >= total) break
-    if (pending.size === 0) break
+    roundsSinceDelivery = deliveredThisRound ? 0 : roundsSinceDelivery + 1
+    if (staleRounds && delivered.length > 0 && pending.size > 0 && roundsSinceDelivery >= staleRounds) {
+      console.warn(`[${tag}] no new results for ${staleRounds} rounds — returning ${delivered.length}/${total} partial results`)
+      break
+    }
   }
+
+  return { delivered, pendingCount: pending.size }
+}
+
+// job_status extraction for video jobs — same call as images, video-shaped URLs
+async function pollVideoJobStatus(jobId) {
+  const result = await callTool('job_status', { jobId })
+  const data = unwrapMCP(result)
+  const item = Array.isArray(data?.results) ? data.results[0] : data
+  const resultsObj = Array.isArray(data?.results) ? item?.results : data?.results
+  const url = resultsObj?.rawUrl || resultsObj?.minUrl || item?.result_url || item?.url
+    || extractVideoUrls(result)[0] || null
+  const shareUrl = resultsObj?.shareUrl || resultsObj?.share_url || item?.shareUrl || item?.share_url
+    || extractShareUrls(result)[0] || null
+  const status = (item?.status || data?.status || '').toLowerCase()
+  const pollAfter = data?.poll_after_seconds ?? 2
+  return { url, shareUrl, status, pollAfter }
+}
+
+async function pollVideoJobs(jobIds, total, onProgress, onPartialResults, isCancelled) {
+  const urls = []
+  const shareUrls = []
+  const { pendingCount } = await pollJobs({
+    jobIds, total,
+    pollOne: pollVideoJobStatus,
+    isCancelled,
+    maxRounds: 270, // × 2s ≈ 9 minutes max
+    intervalMs: 2000,
+    tag: 'HF-VID',
+    onDeliver: (url, { shareUrl }) => {
+      urls.push(url)
+      if (shareUrl) shareUrls.push(shareUrl)
+      onProgress?.(Math.min(35 + (urls.length / total) * 60, 95))
+      onPartialResults?.(urls.slice(0, total))
+    },
+  })
 
   if (urls.length > 0) {
     onProgress?.(100)
     return { urls: urls.slice(0, total), shareUrls: shareUrls.slice(0, total) }
   }
-  if (pending.size === 0) throw new Error('Video generation failed — all jobs ended without output')
+  if (pendingCount === 0) throw new Error('Video generation failed — all jobs ended without output')
   throw new Error('Video generation timed out — check Higgsfield dashboard')
 }
 
@@ -477,7 +547,7 @@ const uploadAudioFile = dataUrl => uploadMedia(dataUrl, {
   prefix: 'audio',
 })
 
-export async function generateVideo({ prompt, aspectRatio = '9:16', duration = 8, count = 1, referenceImages = [], audioRef = null, startFrameUrl = null, model = 'seedance_2_0', resolution = '1080p', onProgress, onPartialResults, isCancelled, pendingKey = null }) {
+export async function generateVideo({ prompt, aspectRatio = '9:16', duration = 8, count = 1, referenceImages = [], audioRef = null, startFrameUrl = null, model = DEFAULT_VIDEO_MODEL, resolution = '1080p', onProgress, onPartialResults, isCancelled, pendingKey = null }) {
   await initSession()
   onProgress?.(5)
 
@@ -614,16 +684,6 @@ function extractImageUrls(result) {
   return [...new Set(byCDN)]
 }
 
-function countTerminalJobs(result) {
-  const data = unwrapMCP(result)
-  if (!Array.isArray(data?.results)) return 0
-  return data.results.filter(r => {
-    if (r?.results?.rawUrl || r?.results?.minUrl || r?.result_url) return true
-    const s = (r?.status || r?.job_status || '').toLowerCase()
-    return ['done', 'completed', 'failed', 'error', 'nsfw', 'content_filtered', 'rejected', 'cancelled'].includes(s)
-  }).length
-}
-
 // When the user's style ref note mentions pose or scene/location, replace those text prompt
 // sections with a direct reference to the style image so the text no longer fights the image.
 function applyStyleNoteOverrides(prompts, styleNote, styleImg) {
@@ -675,41 +735,25 @@ async function pollImageJobStatus(jobId) {
   return { url, status, pollAfter }
 }
 
-const IMAGE_TERMINAL = new Set(['completed', 'done', 'failed', 'error', 'cancelled', 'rejected', 'nsfw', 'content_filtered', 'not_found'])
-
-export async function pollAllJobs(jobIds, total, onProgress, _staleTolerance = 8, isCancelled = null, onPartialResults = null) {
-  const pending = new Set(jobIds)
-  const urls = []
-
-  for (let round = 0; round < 60 && pending.size > 0 && urls.length < total; round++) {
-    if (isCancelled?.()) throw new Error(CANCEL_MESSAGE)
-    if (round > 0) await new Promise(r => setTimeout(r, 3000))
-    if (isCancelled?.()) throw new Error(CANCEL_MESSAGE)
-
-    for (const jobId of [...pending]) {
-      if (isCancelled?.()) throw new Error(CANCEL_MESSAGE)
-      try {
-        const { url, status } = await pollImageJobStatus(jobId)
-        if (url) {
-          pending.delete(jobId)
-          if (!urls.includes(url)) {
-            urls.push(url)
-            onProgress?.(Math.min(22 + (urls.length / total) * 73, 95))
-            onPartialResults?.(urls.slice(0, total))
-          }
-        } else if (IMAGE_TERMINAL.has(status)) {
-          pending.delete(jobId)
-          console.warn('[HF] job', jobId.slice(0, 8), 'terminal without URL, status:', status)
-        }
-      } catch (e) {
-        if (isCancelError(e)) throw e
-        console.warn('[HF] job_status error:', jobId.slice(0, 8), e.message)
-      }
-    }
-  }
-
-  if (urls.length > 0) { onProgress?.(100); return urls.slice(0, total) }
+export async function pollAllJobs(jobIds, total, onProgress, staleTolerance = 8, isCancelled = null, onPartialResults = null) {
   if (jobIds.length === 0) throw new Error('No job IDs to poll')
+  const urls = []
+  await pollJobs({
+    jobIds, total,
+    pollOne: pollImageJobStatus,
+    isCancelled,
+    // staleTolerance (rounds without a new result) both extends the hard cap for
+    // slow models (Soul) and stops re-polling stragglers once partials are in hand.
+    maxRounds: 60 + staleTolerance,
+    staleRounds: staleTolerance,
+    intervalMs: 3000,
+    onDeliver: url => {
+      urls.push(url)
+      onProgress?.(Math.min(22 + (urls.length / total) * 73, 95))
+      onPartialResults?.(urls.slice(0, total))
+    },
+  })
+  if (urls.length > 0) { onProgress?.(100); return urls.slice(0, total) }
   throw new Error('Generation timed out — check Higgsfield dashboard')
 }
 
@@ -719,13 +763,6 @@ const uploadRefImage = dataUrl => uploadMedia(dataUrl, {
   getExt: ct => ct.includes('png') ? 'png' : 'jpeg',
   prefix: 'ref',
 })
-
-function modelBaseParams(model, aspectRatio) {
-  if (model === 'soul_2') return { model, aspect_ratio: aspectRatio, quality: '2k' }
-  // gpt_image_2 accepts both quality and resolution; callers may add resolution if needed
-  if (model === 'gpt_image_2') return { model, aspect_ratio: aspectRatio, count: 1, quality: 'high' }
-  return { model, aspect_ratio: aspectRatio, count: 1, resolution: '2k' }
-}
 
 export async function generateThreeImages({ prompts, aspectRatio = '9:16', model = 'gpt_image_2', faceRef = null, styleRef = null, physicalDesc = '', faceRefNote = '', styleRefNote = '', onProgress, onPartialResults }) {
   await initSession()
@@ -951,36 +988,20 @@ export async function generateNImages({ prompt, count = 1, aspectRatio = '9:16',
   if (pendingKey && jobIds.length) { markPhotoGenSession(); savePendingPhoto(pendingKey, jobIds) }
 
   // Poll via job_status (programmatic polling tool, not job_display which is UI-only).
-  // Sequential per job per round — parallel MCP calls conflict on the shared session.
-  const pending = new Set(jobIds)
   let deliveredCount = directUrls.length
-
-  for (let round = 0; round < 60 && pending.size > 0 && deliveredCount < count; round++) {
-    if (isCancelled?.()) throw new Error(CANCEL_MESSAGE)
-    if (round > 0) await new Promise(r => setTimeout(r, 3000))
-    if (isCancelled?.()) throw new Error(CANCEL_MESSAGE)
-
-    for (const jobId of [...pending]) {
-      if (isCancelled?.()) throw new Error(CANCEL_MESSAGE)
-      try {
-        const { url, status } = await pollImageJobStatus(jobId)
-        if (url) {
-          pending.delete(jobId)
-          if (deliveredCount < count) {
-            deliveredCount++
-            onResult?.(url)
-            onProgress?.(Math.min(22 + (deliveredCount / count) * 73, 95))
-          }
-        } else if (IMAGE_TERMINAL.has(status)) {
-          pending.delete(jobId)
-          console.warn('[HF] job', jobId.slice(0, 8), 'terminal without URL, status:', status)
-        }
-      } catch (e) {
-        if (isCancelError(e)) throw e
-        console.warn('[HF] image poll error:', jobId.slice(0, 8), e.message)
-      }
-    }
-  }
+  await pollJobs({
+    jobIds,
+    total: count - deliveredCount,
+    pollOne: pollImageJobStatus,
+    isCancelled,
+    maxRounds: 60,
+    intervalMs: 3000,
+    onDeliver: url => {
+      deliveredCount++
+      onResult?.(url)
+      onProgress?.(Math.min(22 + (deliveredCount / count) * 73, 95))
+    },
+  })
 
   if (deliveredCount > 0) { onProgress?.(100); return }
   throw new Error('Generation timed out — check Higgsfield dashboard')
@@ -1082,32 +1103,19 @@ export async function generatePosePreviews(influencer, onPoseComplete, { stance 
     }
     const pending = launched.filter(r => r.jobId)
     if (!pending.length) return
-    const jobIds = pending.map(r => r.jobId)
-    const delivered = new Set()
-    for (let i = 0; i < 120; i++) {
-      if (i > 0) await new Promise(r => setTimeout(r, 2500))
-      try {
-        const displays = await Promise.all(jobIds.map(id => callTool('job_display', { id })))
-        const mergedResults = displays.flatMap(d => { const data = unwrapMCP(d); return Array.isArray(data?.results) ? data.results : [] })
-        const display = { results: mergedResults }
-        const data = unwrapMCP(display)
-        if (!Array.isArray(data?.results)) continue
-        for (const r of data.results) {
-          const rId = r?.id || r?.job_id
-          const url = r?.results?.rawUrl || r?.results?.minUrl || r?.result_url
-          if (!url || !rId) continue
-          const match = pending.find(p => p.jobId === rId)
-          if (match && !delivered.has(match.stancedId)) {
-            delivered.add(match.stancedId)
-            onPoseComplete(match.stancedId, url)
-          }
-        }
-        if (delivered.size >= pending.length) break
-        if (countTerminalJobs(display) >= jobIds.length) break
-      } catch (e) {
-        console.warn('[HF] pose preview poll error:', e.message)
-      }
-    }
+    // job_status per pending job through the shared engine — the old loop hit
+    // job_display for EVERY job in parallel each round (session conflicts) and
+    // kept re-polling jobs that had already delivered.
+    const poseByJob = new Map(pending.map(p => [p.jobId, p.stancedId]))
+    await pollJobs({
+      jobIds: pending.map(p => p.jobId),
+      total: pending.length,
+      pollOne: pollImageJobStatus,
+      maxRounds: 120,
+      intervalMs: 2500,
+      tag: 'HF-POSE',
+      onDeliver: (url, { jobId }) => onPoseComplete(poseByJob.get(jobId), url),
+    })
   } catch (e) {
     console.warn('[HF] generatePosePreviews failed:', e.message)
   }

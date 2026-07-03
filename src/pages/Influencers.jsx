@@ -2899,9 +2899,12 @@ function parseAdditionalNotes(notes, durationSecs) {
 // Dialogue annotation — reads the raw script and wraps it with performance notation
 // following the MD guide: emotion before line, [beat]/[breath] pauses, product tilts,
 // micro-expressions (max 2), CTA lands like a friend's tip not a pitch.
+// Options object rather than positional args: the trailing pronoun strings are
+// all the same type, so a transposition compiles silently and misgenders output.
 // productTag = the @image_N string for the product (e.g. '@image_5'), or null
 // isHandheld = true when the subject is self-filming while walking
-function annotateDialogue(rawText, productTag, durationSecs, isHandheld = false, wearMode = false, actionBeats = [], she = 'she', her = 'her', his = 'her') { // his = possessive ('her'/'his')
+// his = possessive pronoun ('her'/'his')
+function annotateDialogue(rawText, { productTag = null, durationSecs, isHandheld = false, wearMode = false, actionBeats = [], she = 'she', her = 'her', his = 'her' } = {}) {
   if (!rawText.trim()) return ''
 
   // Split into clauses:
@@ -4169,7 +4172,7 @@ function ContentStudio({ influencer, onUpdate, onSaveToScripts, onGenerated, res
     // Parse notes first so action beats can be woven into annotateDialogue
     const { actionBeats, directionNotes } = parseAdditionalNotes(additionalNotes, duration)
 
-    const annotatedDialogue = annotateDialogue(fullDialogue, prod1Tag, duration, isHandheld, wearMode, actionBeats, she, her, his)
+    const annotatedDialogue = annotateDialogue(fullDialogue, { productTag: prod1Tag, durationSecs: duration, isHandheld, wearMode, actionBeats, she, her, his })
     // For multi-shot: distribute raw sentences across shots
     const dialogueLines = fullDialogue ? fullDialogue.split(/(?<=[.!?])\s+/).filter(s=>s.trim()) : []
 
@@ -4224,7 +4227,7 @@ function ContentStudio({ influencer, onUpdate, onSaveToScripts, onGenerated, res
         shots.push(`ACTION:\n0:00 to 0:${String(duration).padStart(2,'0')} — ${framing}, ${lens}, ${move}. One continuous take.\n\n${startPin}${actionBody}${onerTail}`.trimEnd())
       } else if (i === 0) {
         const startPin = startFrameUrl ? `Video opens at 0:00 as @image_1 exactly. ` : ''
-        const hookBody = dialogueLines[0] ? annotateDialogue(dialogueLines[0], prod1Tag, duration, isHandheld, wearMode, [], she, her, his) : (startFrameUrl ? '' : `@image_1 faces camera. Eyes on lens at 0:00.`)
+        const hookBody = dialogueLines[0] ? annotateDialogue(dialogueLines[0], { productTag: prod1Tag, durationSecs: duration, isHandheld, wearMode, she, her, his }) : (startFrameUrl ? '' : `@image_1 faces camera. Eyes on lens at 0:00.`)
         shots.push(`SHOT 1 — ${ts}, ${framing}, ${lens}, ${move}.\n${startPin}${hookBody}`.trimEnd())
       } else {
         const line = dialogueLines[i] || ''

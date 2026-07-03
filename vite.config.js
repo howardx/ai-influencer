@@ -1,3 +1,4 @@
+import { Readable, pipeline } from 'node:stream'
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 // Reuse the production guard so the dev mirror can't drift from it (an unguarded
@@ -59,15 +60,22 @@ const imgProxyPlugin = {
         if (!ct.startsWith('image/') && !ct.startsWith('video/')) {
           res.writeHead(400); res.end('Not an image or video'); return
         }
-        const buf = await r.arrayBuffer()
+        // Stream, matching prod (api/img-proxy.js) — no whole-file buffering
         res.writeHead(r.status, {
           'Content-Type': ct,
           'Content-Disposition': `attachment; filename="${safeFilename(name)}"`,
           'Access-Control-Allow-Origin': '*',
         })
-        res.end(Buffer.from(buf))
+        if (r.body) {
+          // pipeline tears down the upstream stream if the browser disconnects —
+          // matters here because the dev server is long-lived
+          pipeline(Readable.fromWeb(r.body), res, () => {})
+        } else {
+          res.end()
+        }
       } catch (e) {
-        res.writeHead(500); res.end('Proxy error: ' + e.message)
+        if (!res.headersSent) { res.writeHead(500); res.end('Proxy error: ' + e.message) }
+        else res.destroy()
       }
     })
   },

@@ -1,14 +1,7 @@
 import { useState, useRef } from 'react'
 import { useInspirationBoards, generateId } from '../store'
-import { compressImage } from '../utils/imageUtils'
+import { compressImage, downloadImage } from '../utils/imageUtils'
 import Lightbox from '../components/Lightbox'
-
-function downloadImage(src, filename) {
-  const a = document.createElement('a')
-  a.href = src
-  a.download = filename
-  a.click()
-}
 
 function BoardCard({ board, onSelect, onRename, onDelete }) {
   const [editing, setEditing] = useState(false)

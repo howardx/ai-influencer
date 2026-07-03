@@ -1,6 +1,7 @@
 import { useState, useRef, useEffect, useCallback } from 'react'
 import { createPortal } from 'react-dom'
 import { generateNImages, generatePosePreviews, generateSingleImage, savePendingPhoto, clearPendingPhoto, getPendingPhoto, pollAllJobs, hasPhotoGenSession, initSession, isCancelError } from '../utils/higgsfieldGenerate'
+import { downloadImage } from '../utils/imageUtils'
 import { isHFConnected } from '../utils/higgsfieldAuth'
 import { buildCharSheetPrompt, buildCharSheetPromptWithClaude } from '../utils/charSheetPrompt'
 import { useInfluencers, useBrandDeals } from '../store'
@@ -77,20 +78,6 @@ const TIME_VISUAL = {
   afternoon:     { overlay: 'rgba(253,224,71,0.14)',  badge: '☀️ Afternoon',  badgeBg: 'rgba(253,224,71,0.22)'  },
   'golden-hour': { overlay: 'rgba(251,146,60,0.28)',  badge: '🌇 Golden Hour',badgeBg: 'rgba(251,146,60,0.28)'  },
   night:         { overlay: 'rgba(10,10,35,0.55)',    badge: '🌙 Night',      badgeBg: 'rgba(50,50,100,0.35)'   },
-}
-
-async function downloadImage(url, filename) {
-  try {
-    const res = await fetch(url)
-    const blob = await res.blob()
-    const a = document.createElement('a')
-    a.href = URL.createObjectURL(blob)
-    a.download = filename
-    a.click()
-    URL.revokeObjectURL(a.href)
-  } catch {
-    window.open(url, '_blank')
-  }
 }
 
 

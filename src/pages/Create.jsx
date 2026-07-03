@@ -5,8 +5,9 @@ import { useInfluencers, generateId } from '../store'
 import { buildThreeVariationPrompts } from '../utils/systemPrompt'
 import { analyzeBackstory } from '../utils/backstoryAnalysis'
 import { generateThreeImages } from '../utils/higgsfieldGenerate'
+import { modelEstMs } from '../utils/modelCaps'
 import { isHFConnected, startHiggsfieldOAuthPopup } from '../utils/higgsfieldAuth'
-import { compressImage } from '../utils/imageUtils'
+import { compressImage, downloadImage } from '../utils/imageUtils'
 import { gColor } from '../utils/influencerUtils'
 
 const NICHES = ['Fashion', 'Beauty', 'Lifestyle', 'Fitness', 'Travel', 'Food & Dining', 'Tech', 'Gaming', 'Finance', 'Entertainment', 'Wellness', 'Sports', 'Other']
@@ -28,11 +29,13 @@ const VIBE_OPTIONS = [
 ]
 const STEPS = ['Basics', 'References', 'Story', 'Look', 'Generate']
 
+// Display metadata only — behavioral caps (params, ref limits, time estimates)
+// live in utils/modelCaps.js
 const MODELS = [
-  { id: 'soul_2',            name: 'Higgsfield Soul', tag: 'Influencer-Native',   tagColor: '#EC4899', provider: 'higgsfield',              desc: 'Native model for fashion and UGC.',          maxRefs: 1 },
-  { id: 'gpt_image_2',       name: 'GPT Image 2',     tag: 'Max Quality',         tagColor: '#10B981', provider: 'openai',                  desc: 'Highest quality output, maximum realism.',   maxRefs: 2 },
-  { id: 'nano_banana_2',     name: 'Nano Banana Pro', tag: 'Sharpest Detail',     tagColor: '#8B5CF6', provider: 'banana', version: 'Pro', desc: 'Maximum detail and portrait precision.',     maxRefs: 2 },
-  { id: 'nano_banana_flash', name: 'Nano Banana 2',   tag: 'Fastest',             tagColor: '#0EA5E9', provider: 'banana', version: '2',   desc: 'Rapid results, still premium quality.',      maxRefs: 2 },
+  { id: 'soul_2',            name: 'Higgsfield Soul', tag: 'Influencer-Native',   tagColor: '#EC4899', provider: 'higgsfield',              desc: 'Native model for fashion and UGC.' },
+  { id: 'gpt_image_2',       name: 'GPT Image 2',     tag: 'Max Quality',         tagColor: '#10B981', provider: 'openai',                  desc: 'Highest quality output, maximum realism.' },
+  { id: 'nano_banana_2',     name: 'Nano Banana Pro', tag: 'Sharpest Detail',     tagColor: '#8B5CF6', provider: 'banana', version: 'Pro', desc: 'Maximum detail and portrait precision.' },
+  { id: 'nano_banana_flash', name: 'Nano Banana 2',   tag: 'Fastest',             tagColor: '#0EA5E9', provider: 'banana', version: '2',   desc: 'Rapid results, still premium quality.' },
 ]
 const MODEL_PREF_KEY = 'aiis_model_pref'
 
@@ -871,10 +874,8 @@ const FAKE_WAYPOINTS = [
   [205000, 78], [225000, 85], [250000, 89], [300000, 93], [360000, 95],
 ]
 
-const MODEL_EST_MS = { soul_2: 60000, nano_banana_flash: 60000, nano_banana_2: 90000, gpt_image_2: 120000 }
-
 function estLabel(model, aspectRatio, hasRef = false) {
-  const base = MODEL_EST_MS[model] ?? 90000
+  const base = modelEstMs(model)
   const total = base + (aspectRatio === '16:9' ? 30000 : 0) + (hasRef ? 60000 : 0)
   if (total <= 60000) return '~1 minute'
   if (total <= 90000) return '~90 seconds'
@@ -885,7 +886,7 @@ function estLabel(model, aspectRatio, hasRef = false) {
 }
 
 function estPhrase(model, aspectRatio, hasRef = false) {
-  const base = MODEL_EST_MS[model] ?? 90000
+  const base = modelEstMs(model)
   const total = base + (aspectRatio === '16:9' ? 30000 : 0) + (hasRef ? 60000 : 0)
   if (total <= 60000) return 'about a minute'
   if (total <= 90000) return 'like 90 seconds'
@@ -904,7 +905,7 @@ function GeneratingScreen({ genProgress, model, aspectRatio, landscape, hasRef =
   const startRef = useRef(Date.now())
   const prevRef = useRef(0)
 
-  const estimatedMs = (MODEL_EST_MS[model] ?? 90000) + (aspectRatio === '16:9' ? 30000 : 0) + (hasRef ? 60000 : 0)
+  const estimatedMs = modelEstMs(model) + (aspectRatio === '16:9' ? 30000 : 0) + (hasRef ? 60000 : 0)
   const scale = estimatedMs / 360000
   const scaledWaypoints = FAKE_WAYPOINTS.map(([t, v]) => [t * scale, v])
 
@@ -1034,36 +1035,18 @@ function GeneratingScreen({ genProgress, model, aspectRatio, landscape, hasRef =
   )
 }
 
-// ── Shared download helper ────────────────────────────────────
-async function downloadImage(url, index) {
-  try {
-    const res = await fetch(url)
-    const blob = await res.blob()
-    const ext = blob.type.includes('png') ? 'png' : 'jpg'
-    const a = document.createElement('a')
-    a.href = URL.createObjectURL(blob)
-    a.download = `influencer-look-${index + 1}.${ext}`
-    document.body.appendChild(a); a.click(); document.body.removeChild(a)
-    URL.revokeObjectURL(a.href)
-  } catch {
-    window.open(url, '_blank')
-  }
-}
-
 // ── Full-size lightbox ────────────────────────────────────────
 function Lightbox({ url, index, onClose }) {
-  const [downloading, setDownloading] = useState(false)
-
   useEffect(() => {
     const fn = e => { if (e.key === 'Escape') onClose() }
     window.addEventListener('keydown', fn)
     return () => window.removeEventListener('keydown', fn)
   }, [onClose])
 
-  async function dl() {
-    setDownloading(true)
-    await downloadImage(url, index)
-    setDownloading(false)
+  // Synchronous — the shared helper just clicks an anchor (the browser handles
+  // the transfer), so there is no downloading state to show.
+  function dl() {
+    downloadImage(url, `influencer-look-${index + 1}.jpg`)
   }
 
   return (
@@ -1094,10 +1077,7 @@ function Lightbox({ url, index, onClose }) {
           display: 'flex', alignItems: 'center', gap: 7,
           cursor: 'pointer', backdropFilter: 'blur(12px)',
         }}>
-          {downloading
-            ? <div style={{ width: 13, height: 13, borderRadius: '50%', border: '2px solid rgba(255,255,255,0.3)', borderTopColor: '#fff', animation: 'spin 0.7s linear infinite' }} />
-            : <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
-          }
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
           Download
         </button>
       </div>
@@ -1108,14 +1088,10 @@ function Lightbox({ url, index, onClose }) {
 // ── Single variation card ─────────────────────────────────────
 function VariationCard({ url, selected, gc, onSelect, index, landscape, onExpand }) {
   const [hovered, setHovered] = useState(false)
-  const [downloading, setDownloading] = useState(false)
 
-  async function dl(e) {
+  function dl(e) {
     e.stopPropagation()
-    if (downloading) return
-    setDownloading(true)
-    await downloadImage(url, index)
-    setDownloading(false)
+    downloadImage(url, `influencer-look-${index + 1}.jpg`)
   }
 
   function expand(e) {
@@ -1189,10 +1165,7 @@ function VariationCard({ url, selected, gc, onSelect, index, landscape, onExpand
           backdropFilter: 'blur(10px)', display: 'flex', alignItems: 'center', justifyContent: 'center',
           color: '#fff', cursor: 'pointer',
         }}>
-          {downloading
-            ? <div style={{ width: 13, height: 13, borderRadius: '50%', border: '2px solid rgba(255,255,255,0.3)', borderTopColor: '#fff', animation: 'spin 0.7s linear infinite' }} />
-            : <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
-          }
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
         </button>
       )}
 

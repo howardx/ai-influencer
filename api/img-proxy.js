@@ -27,6 +27,7 @@ export function safeFilename(name) {
     .slice(0, 128)
 }
 
+import { Readable, pipeline } from 'node:stream'
 import { rateLimit, clientIp } from '../lib/rateLimit.js'
 
 export default async function handler(req, res) {
@@ -52,13 +53,27 @@ export default async function handler(req, res) {
       res.status(400).send('Not an image or video'); return
     }
 
-    const buf = await upstream.arrayBuffer()
     res.setHeader('Content-Type', ct)
     res.setHeader('Content-Disposition', `attachment; filename="${safeFilename(name)}"`)
     res.setHeader('Access-Control-Allow-Origin', '*')
-    res.setHeader('Cache-Control', 'public, max-age=3600')
-    res.end(Buffer.from(buf))
+    // Generated media on the allowlisted CDNs is immutable — a URL's content never
+    // changes — so cache as long as possible instead of re-proxying every hour.
+    res.setHeader('Cache-Control', 'public, max-age=31536000, immutable')
+    // fetch auto-decompresses encoded bodies but reports the COMPRESSED length —
+    // forwarding it for an encoded response under-counts and truncates the download.
+    const len = upstream.headers.get('content-length')
+    if (len && !upstream.headers.get('content-encoding')) res.setHeader('Content-Length', len)
+
+    // Stream instead of buffering — videos run tens of MB and arrayBuffer() held
+    // the entire file in function memory before the first byte went out.
+    // pipeline (vs pipe) also tears down the upstream stream on client disconnect.
+    if (upstream.body) {
+      pipeline(Readable.fromWeb(upstream.body), res, () => {})
+    } else {
+      res.end()
+    }
   } catch (e) {
-    res.status(500).send('Proxy error')
+    if (!res.headersSent) res.status(500).send('Proxy error')
+    else res.destroy()
   }
 }
