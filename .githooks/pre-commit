@@ -1,0 +1,14 @@
+#!/bin/sh
+# Run the unit test suite before every commit; a failing suite blocks the commit.
+# Bypass in an emergency with: git commit --no-verify
+
+echo "pre-commit: running unit tests..."
+npx vitest run
+status=$?
+
+if [ $status -ne 0 ]; then
+  echo ""
+  echo "pre-commit: tests failed — commit blocked."
+  echo "Fix the failures, or bypass once with 'git commit --no-verify'."
+  exit $status
+fi
