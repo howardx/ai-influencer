@@ -3,6 +3,12 @@ import { getHFToken, refreshHFToken, disconnectHF } from './higgsfieldAuth'
 const MCP_URL = '/api/hf/mcp'
 const PENDING_KEY = 'hf_pending_gens'
 
+// Cancellation is signaled by throwing an Error with this exact message. The
+// keep-pending-on-cancel contract (here and in the page components) depends on
+// recognizing it — never compare the string directly, use isCancelError.
+export const CANCEL_MESSAGE = 'CANCELLED'
+export const isCancelError = e => e?.message === CANCEL_MESSAGE
+
 // Flip to true while diagnosing Higgsfield issues — verbose request/response logs
 const HF_DEBUG = false
 const hflog = (...a) => { if (HF_DEBUG) console.log('[HF]', ...a) }
@@ -25,22 +31,32 @@ function mediaFingerprint(dataUrl) {
 }
 
 // ── Pending generation persistence ──────────────────────────────
+// A corrupted value must never crash generation permanently — parse failures fall
+// back to [] so the next write overwrites the bad value (same pattern as the media
+// cache above). Non-array shapes count as corrupted too.
+function readPendingList(key) {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(key) || '[]')
+    return Array.isArray(parsed) ? parsed : []
+  } catch { return [] }
+}
+
 export function savePendingGen(influencerId, slot, jobIds) {
-  const list = JSON.parse(localStorage.getItem(PENDING_KEY) || '[]')
+  const list = readPendingList(PENDING_KEY)
   const filtered = list.filter(j => !(j.influencerId === influencerId && j.slot === slot))
   filtered.push({ influencerId, slot, jobIds, startedAt: Date.now() })
   localStorage.setItem(PENDING_KEY, JSON.stringify(filtered))
 }
 
 export function clearPendingGen(influencerId, slot) {
-  const list = JSON.parse(localStorage.getItem(PENDING_KEY) || '[]')
+  const list = readPendingList(PENDING_KEY)
   localStorage.setItem(PENDING_KEY, JSON.stringify(
     list.filter(j => !(j.influencerId === influencerId && j.slot === slot))
   ))
 }
 
 export function getPendingGens() {
-  return JSON.parse(localStorage.getItem(PENDING_KEY) || '[]')
+  return readPendingList(PENDING_KEY)
 }
 
 // ── Pending VIDEO generation persistence ────────────────────────
@@ -54,36 +70,36 @@ export function markPhotoGenSession() { try { sessionStorage.setItem(PHOTO_SESSI
 export function hasPhotoGenSession()  { try { return !!sessionStorage.getItem(PHOTO_SESSION_KEY) } catch { return false } }
 
 export function savePendingVideo(influencerId, jobIds, count) {
-  const list = JSON.parse(localStorage.getItem(PENDING_VIDEO_KEY) || '[]')
+  const list = readPendingList(PENDING_VIDEO_KEY)
   const next = list.filter(j => j.influencerId !== influencerId)
   next.push({ influencerId, jobIds, count, startedAt: Date.now() })
   localStorage.setItem(PENDING_VIDEO_KEY, JSON.stringify(next))
 }
 
 export function clearPendingVideo(influencerId) {
-  const list = JSON.parse(localStorage.getItem(PENDING_VIDEO_KEY) || '[]')
+  const list = readPendingList(PENDING_VIDEO_KEY)
   localStorage.setItem(PENDING_VIDEO_KEY, JSON.stringify(
     list.filter(j => j.influencerId !== influencerId)
   ))
 }
 
 export function getPendingVideo(influencerId) {
-  const list = JSON.parse(localStorage.getItem(PENDING_VIDEO_KEY) || '[]')
+  const list = readPendingList(PENDING_VIDEO_KEY)
   return list.find(j => j.influencerId === influencerId) || null
 }
 
 export function savePendingPhoto(influencerId, jobIds) {
-  const list = JSON.parse(localStorage.getItem(PENDING_PHOTO_KEY) || '[]')
+  const list = readPendingList(PENDING_PHOTO_KEY)
   const next = list.filter(j => j.influencerId !== influencerId)
   next.push({ influencerId, jobIds, startedAt: Date.now() })
   localStorage.setItem(PENDING_PHOTO_KEY, JSON.stringify(next))
 }
 export function clearPendingPhoto(influencerId) {
-  const list = JSON.parse(localStorage.getItem(PENDING_PHOTO_KEY) || '[]')
+  const list = readPendingList(PENDING_PHOTO_KEY)
   localStorage.setItem(PENDING_PHOTO_KEY, JSON.stringify(list.filter(j => j.influencerId !== influencerId)))
 }
 export function getPendingPhoto(influencerId) {
-  const list = JSON.parse(localStorage.getItem(PENDING_PHOTO_KEY) || '[]')
+  const list = readPendingList(PENDING_PHOTO_KEY)
   return list.find(j => j.influencerId === influencerId) || null
 }
 
@@ -336,12 +352,12 @@ async function pollVideoJobs(jobIds, total, onProgress, onPartialResults, isCanc
   const softRetries = new Map() // jobId → count of rounds seen as soft-terminal with no URL
 
   for (let round = 0; round < 270; round++) { // 270 × 2s = 9 minutes max
-    if (isCancelled?.()) throw new Error('CANCELLED')
+    if (isCancelled?.()) throw new Error(CANCEL_MESSAGE)
     if (round > 0) await new Promise(r => setTimeout(r, 2000))
-    if (isCancelled?.()) throw new Error('CANCELLED')
+    if (isCancelled?.()) throw new Error(CANCEL_MESSAGE)
 
     for (const jobId of [...pending]) {
-      if (isCancelled?.()) throw new Error('CANCELLED')
+      if (isCancelled?.()) throw new Error(CANCEL_MESSAGE)
       try {
         const result = await callTool('job_status', { jobId })
         const data = unwrapMCP(result)
@@ -381,7 +397,7 @@ async function pollVideoJobs(jobIds, total, onProgress, onPartialResults, isCanc
           }
         }
       } catch (e) {
-        if (e.message === 'CANCELLED') throw e
+        if (isCancelError(e)) throw e
         console.warn('[HF-VID] job_status error:', jobId.slice(0, 8), e.message)
       }
     }
@@ -569,7 +585,7 @@ export async function generateVideo({ prompt, aspectRatio = '9:16', duration = 8
     // Only clear the pending entry if this wasn't a navigation-triggered cancel.
     // A cancel from unmount leaves the entry in localStorage so the resume effect
     // on remount can pick up where polling left off.
-    if (pendingKey && e.message !== 'CANCELLED') clearPendingVideo(pendingKey)
+    if (pendingKey && !isCancelError(e)) clearPendingVideo(pendingKey)
     throw e
   }
 }
@@ -666,12 +682,12 @@ export async function pollAllJobs(jobIds, total, onProgress, _staleTolerance = 8
   const urls = []
 
   for (let round = 0; round < 60 && pending.size > 0 && urls.length < total; round++) {
-    if (isCancelled?.()) throw new Error('CANCELLED')
+    if (isCancelled?.()) throw new Error(CANCEL_MESSAGE)
     if (round > 0) await new Promise(r => setTimeout(r, 3000))
-    if (isCancelled?.()) throw new Error('CANCELLED')
+    if (isCancelled?.()) throw new Error(CANCEL_MESSAGE)
 
     for (const jobId of [...pending]) {
-      if (isCancelled?.()) throw new Error('CANCELLED')
+      if (isCancelled?.()) throw new Error(CANCEL_MESSAGE)
       try {
         const { url, status } = await pollImageJobStatus(jobId)
         if (url) {
@@ -686,7 +702,7 @@ export async function pollAllJobs(jobIds, total, onProgress, _staleTolerance = 8
           console.warn('[HF] job', jobId.slice(0, 8), 'terminal without URL, status:', status)
         }
       } catch (e) {
-        if (e.message === 'CANCELLED') throw e
+        if (isCancelError(e)) throw e
         console.warn('[HF] job_status error:', jobId.slice(0, 8), e.message)
       }
     }
@@ -818,16 +834,16 @@ export async function generateSingleImage({ prompt, aspectRatio = '16:9', resolu
 
   const baseParams = { ...modelBaseParams('gpt_image_2', aspectRatio), resolution }
   const medias = []
-  let faceUploaded = false
-  let outfitUploaded = false
 
   if (referenceImage) {
     try {
       hflog('[HF] uploading identity reference...')
       medias.push({ value: await uploadRefImage(referenceImage), role: 'image' })
-      faceUploaded = true
       onProgress?.(12)
     } catch (e) {
+      // With an outfit image queued behind us we must fail: the outfit would slide
+      // into the @image1 slot and be treated as the identity reference.
+      if (outfitImage) throw new Error(`Identity reference upload failed: ${e.message} — please try again`)
       console.warn('[HF] reference upload failed, generating without it:', e.message)
     }
   }
@@ -836,9 +852,10 @@ export async function generateSingleImage({ prompt, aspectRatio = '16:9', resolu
     try {
       hflog('[HF] uploading outfit reference...')
       medias.push({ value: await uploadRefImage(outfitImage), role: 'image' })
-      outfitUploaded = true
       onProgress?.(18)
     } catch (e) {
+      // Safe to degrade: @image1 (identity) is already in place, the prompt's
+      // @image2 just goes unmatched instead of pointing at the wrong image.
       console.warn('[HF] outfit reference upload failed:', e.message)
     }
   }
@@ -867,9 +884,14 @@ export async function generateSingleImage({ prompt, aspectRatio = '16:9', resolu
   try {
     const urls = await pollAllJobs(jobIds, 1, onProgress, 16, isCancelled)
     onProgress?.(100)
-    return urls[0] ?? null
-  } finally {
     if (pendingKey) clearPendingGen(pendingKey.influencerId, pendingKey.slot)
+    return urls[0] ?? null
+  } catch (e) {
+    // Keep the pending entry on a navigation-triggered cancel so the resume effect
+    // can pick the job back up on remount (mirrors generateVideo). A user-initiated
+    // cancel clears the entry itself in the page's cancel handler.
+    if (pendingKey && !isCancelError(e)) clearPendingGen(pendingKey.influencerId, pendingKey.slot)
+    throw e
   }
 }
 
@@ -890,16 +912,17 @@ export async function generateNImages({ prompt, count = 1, aspectRatio = '9:16',
     ...propImages.map((img, i) => ({ img, label: `prop${i + 1}` })),
   ].filter(e => e.img)
 
-  const uploaded = await Promise.all(refEntries.map(async ({ img, label }) => {
-    try {
-      const value = await uploadRefImage(img)
-      return { value, role: 'image' }
-    } catch (e) {
-      console.warn(`[HF] ${label} upload failed:`, e.message)
-      return null
-    }
-  }))
-  uploaded.filter(Boolean).forEach(m => medias.push(m))
+  // Any upload failure fails the whole batch. The prompt's @image1..@imageN tags
+  // were assigned positionally over these entries — silently dropping one slot
+  // would shift every later media under the wrong tag (e.g. the outfit image
+  // becoming the identity reference) and generate wrong output with no error.
+  // allSettled so the error names every failed reference, not just the first.
+  const settled = await Promise.allSettled(refEntries.map(({ img }) => uploadRefImage(img)))
+  const failed = settled
+    .map((r, i) => r.status === 'rejected' ? `${refEntries[i].label} (${r.reason?.message || r.reason})` : null)
+    .filter(Boolean)
+  if (failed.length) throw new Error(`Reference upload failed: ${failed.join('; ')} — please try again`)
+  settled.forEach(r => medias.push({ value: r.value, role: 'image' }))
   onProgress?.(18)
 
   const baseParams = { ...modelBaseParams('gpt_image_2', aspectRatio), resolution }
@@ -933,12 +956,12 @@ export async function generateNImages({ prompt, count = 1, aspectRatio = '9:16',
   let deliveredCount = directUrls.length
 
   for (let round = 0; round < 60 && pending.size > 0 && deliveredCount < count; round++) {
-    if (isCancelled?.()) throw new Error('CANCELLED')
+    if (isCancelled?.()) throw new Error(CANCEL_MESSAGE)
     if (round > 0) await new Promise(r => setTimeout(r, 3000))
-    if (isCancelled?.()) throw new Error('CANCELLED')
+    if (isCancelled?.()) throw new Error(CANCEL_MESSAGE)
 
     for (const jobId of [...pending]) {
-      if (isCancelled?.()) throw new Error('CANCELLED')
+      if (isCancelled?.()) throw new Error(CANCEL_MESSAGE)
       try {
         const { url, status } = await pollImageJobStatus(jobId)
         if (url) {
@@ -953,7 +976,7 @@ export async function generateNImages({ prompt, count = 1, aspectRatio = '9:16',
           console.warn('[HF] job', jobId.slice(0, 8), 'terminal without URL, status:', status)
         }
       } catch (e) {
-        if (e.message === 'CANCELLED') throw e
+        if (isCancelError(e)) throw e
         console.warn('[HF] image poll error:', jobId.slice(0, 8), e.message)
       }
     }

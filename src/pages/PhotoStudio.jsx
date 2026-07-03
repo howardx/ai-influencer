@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect, useCallback } from 'react'
 import { createPortal } from 'react-dom'
-import { generateNImages, generatePosePreviews, generateSingleImage, savePendingPhoto, clearPendingPhoto, getPendingPhoto, pollAllJobs, hasPhotoGenSession } from '../utils/higgsfieldGenerate'
+import { generateNImages, generatePosePreviews, generateSingleImage, savePendingPhoto, clearPendingPhoto, getPendingPhoto, pollAllJobs, hasPhotoGenSession, initSession, isCancelError } from '../utils/higgsfieldGenerate'
 import { isHFConnected } from '../utils/higgsfieldAuth'
 import { buildCharSheetPrompt, buildCharSheetPromptWithClaude } from '../utils/charSheetPrompt'
 import { useInfluencers, useBrandDeals } from '../store'
@@ -551,7 +551,10 @@ export default function PhotoStudioPanel({ influencer, onGoToWardrobe, onUseAsSt
     setGenerating(true)
     setSmoothPct(30)
     const batchId = `resume-${Date.now()}`
-    pollAllJobs(pending.jobIds, pending.jobIds.length, setSmoothPct, 16, () => cancelRef.current)
+    // After a reload the module-level MCP session is gone — polling without
+    // initSession() fails every round and falsely reports "timed out".
+    initSession()
+      .then(() => pollAllJobs(pending.jobIds, pending.jobIds.length, setSmoothPct, 16, () => cancelRef.current))
       .then(urls => {
         if (!cancelRef.current) {
           urls.forEach(url => { setCurrentImgs(prev => prev.includes(url) ? prev : [...prev, url]); addToHistory(url, batchId) })
@@ -671,7 +674,7 @@ export default function PhotoStudioPanel({ influencer, onGoToWardrobe, onUseAsSt
         return next
       })
     } catch (e) {
-      if (!e.message?.includes('CANCELLED')) alert('Generation failed: ' + e.message)
+      if (!isCancelError(e)) alert('Generation failed: ' + e.message)
     } finally {
       setPropGenerating(p => ({ ...p, [targetIdx]: false }))
       setPropProgress(p => ({ ...p, [targetIdx]: 0 }))

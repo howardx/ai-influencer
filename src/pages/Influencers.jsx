@@ -6,7 +6,7 @@ import ImageGrid from '../components/ImageGrid'
 import MasonryGrid from '../components/MasonryGrid'
 import Lightbox from '../components/Lightbox'
 import { compressImage, downloadImage } from '../utils/imageUtils'
-import { generateSingleImage, generateThreeImages, generateVideo, initSession, pollAllJobs, getPendingGens, clearPendingGen, getPendingVideo, clearPendingVideo, resumeVideoJob } from '../utils/higgsfieldGenerate'
+import { generateSingleImage, generateThreeImages, generateVideo, initSession, pollAllJobs, getPendingGens, clearPendingGen, getPendingVideo, clearPendingVideo, resumeVideoJob, isCancelError } from '../utils/higgsfieldGenerate'
 import { buildThreeVariationPrompts } from '../utils/systemPrompt'
 import { gColor, pLabel } from '../utils/influencerUtils'
 import { useTheme } from '../context/theme'
@@ -388,21 +388,29 @@ function CharacterSheetSlot({ influencer, onSave, onLightbox }) {
     return () => clearInterval(t)
   }, [loading])
 
-  // Resume any in-progress job that survived a page reload
+  // Cancel any in-flight generation — manual or resumed — when the slot unmounts
+  // or switches influencer. A late onSave must never write into the wrong slot or
+  // overwrite an image the user replaced manually. The pending entry stays in
+  // localStorage so the next mount can resume the still-running job.
+  useEffect(() => () => { cancelRef.current = true }, [influencer.id])
+
+  // Resume any in-progress job that survived a page reload.
   useEffect(() => {
     const job = getPendingGens().find(j => j.influencerId === influencer.id && j.slot === 'characterSheetImage')
     if (!job) { setLoading(false); return }
     const secondsIn = Math.floor((Date.now() - job.startedAt) / 1000)
     setElapsed(secondsIn)
     setLoading(true)
+    cancelRef.current = false
     initSession()
-      .then(() => pollAllJobs(job.jobIds, 1, () => {}, 16))
+      .then(() => pollAllJobs(job.jobIds, 1, () => {}, 16, () => cancelRef.current))
       .then(urls => {
+        if (cancelRef.current) return
         if (urls[0]) { onSave(urls[0]); setOpen(false) }
         else setErr('No image returned — please try again')
       })
-      .catch(e => setErr(e.message || 'Resumed generation failed'))
-      .finally(() => { clearPendingGen(influencer.id, 'characterSheetImage'); setLoading(false) })
+      .catch(e => { if (!cancelRef.current && !isCancelError(e)) setErr(e.message || 'Resumed generation failed') })
+      .finally(() => { if (!cancelRef.current) { clearPendingGen(influencer.id, 'characterSheetImage'); setLoading(false) } })
   }, [influencer.id]) // eslint-disable-line
 
   function cancelGeneration() {
@@ -590,21 +598,29 @@ function CloseUpSlot({ influencer, imageKey, label, onSave, onLightbox, promptFn
     return () => clearInterval(t)
   }, [loading])
 
-  // Resume any in-progress job that survived a page reload
+  // Cancel any in-flight generation — manual or resumed — when the slot unmounts
+  // or switches influencer/slot. A late onSave must never write into the wrong
+  // slot or overwrite an image the user replaced manually. The pending entry stays
+  // in localStorage so the next mount can resume the still-running job.
+  useEffect(() => () => { cancelRef.current = true }, [influencer.id, imageKey])
+
+  // Resume any in-progress job that survived a page reload.
   useEffect(() => {
     const job = getPendingGens().find(j => j.influencerId === influencer.id && j.slot === imageKey)
     if (!job) { setLoading(false); return }
     const secondsIn = Math.floor((Date.now() - job.startedAt) / 1000)
     setElapsed(secondsIn)
     setLoading(true)
+    cancelRef.current = false
     initSession()
-      .then(() => pollAllJobs(job.jobIds, 1, () => {}, 16))
+      .then(() => pollAllJobs(job.jobIds, 1, () => {}, 16, () => cancelRef.current))
       .then(urls => {
+        if (cancelRef.current) return
         if (urls[0]) onSave(urls[0])
         else setErr('No image returned — please try again')
       })
-      .catch(e => setErr(e.message || 'Resumed generation failed'))
-      .finally(() => { clearPendingGen(influencer.id, imageKey); setLoading(false) })
+      .catch(e => { if (!cancelRef.current && !isCancelError(e)) setErr(e.message || 'Resumed generation failed') })
+      .finally(() => { if (!cancelRef.current) { clearPendingGen(influencer.id, imageKey); setLoading(false) } })
   }, [influencer.id, imageKey]) // eslint-disable-line
 
   function cancelGeneration() {
@@ -1752,7 +1768,7 @@ function WardrobeGenerator({ influencer, onAdd }) {
       }
     } catch (e) {
       clearWardrobePending(influencer.id)
-      if (!cancelRef.current && e.message !== 'CANCELLED') setError(e.message)
+      if (!cancelRef.current && !isCancelError(e)) setError(e.message)
     } finally {
       if (!cancelRef.current) { setGenerating(false); setProgress(0) }
     }
@@ -2472,7 +2488,7 @@ function BrandDealSection({ deals=[], onChange }) {
       if (sheetUrl) updateDeal(deal.id,{characterSheet:sheetUrl})
     } catch(e) {
       console.error('[CharSheet] Higgsfield error:', e)
-      if (!e.message?.includes('CANCELLED')) alert('Image generation step failed: '+e.message)
+      if (!isCancelError(e)) alert('Image generation step failed: '+e.message)
     } finally {
       setGenerating(g=>({...g,[deal.id]:false}))
       setGenProgress(p=>({...p,[deal.id]:0}))
@@ -3963,8 +3979,14 @@ function ContentStudio({ influencer, onUpdate, onSaveToScripts, onGenerated, res
         const histUrls = [...new Set(result.urls.filter(Boolean))]
         if (histUrls.length && genEpochRef.current === myEpoch) savedOnGenerated?.(histUrls, currentSettingsSnapshot())
       })
-      .catch(e => { if (!cancelRef.current && genEpochRef.current === myEpoch) setGenError(e.message) })
-      .finally(() => { clearPendingVideo(influencer.id); try { localStorage.removeItem(`hf_gen_start_${influencer.id}`) } catch {} clearInterval(elapsedRef.current); if (genEpochRef.current === myEpoch) setGenerating(false) })
+      .then(() => { clearPendingVideo(influencer.id); try { localStorage.removeItem(`hf_gen_start_${influencer.id}`) } catch {} })
+      .catch(e => {
+        // A CANCELLED here means unmount/epoch-bump, not failure — keep the pending
+        // entry so the next mount can resume the still-running (paid) job.
+        if (!isCancelError(e)) { clearPendingVideo(influencer.id); try { localStorage.removeItem(`hf_gen_start_${influencer.id}`) } catch {} }
+        if (!cancelRef.current && genEpochRef.current === myEpoch) setGenError(e.message)
+      })
+      .finally(() => { clearInterval(elapsedRef.current); if (genEpochRef.current === myEpoch) setGenerating(false) })
   }, [influencer.id]) // eslint-disable-line
 
   // Smooth fake progress during the render wait (33% → 88% over 8 minutes)
@@ -6214,7 +6236,7 @@ export default function Influencers() {
           </div>
 
           <div style={{ display: studioTab==='photo' ? 'block' : 'none' }}>
-            <PhotoStudioPanel influencer={influencer} restoreKey={photoRestoreKey} onGoToWardrobe={() => {
+            <PhotoStudioPanel key={influencer.id} influencer={influencer} restoreKey={photoRestoreKey} onGoToWardrobe={() => {
               setStudioTab('influencer')
               localStorage.setItem('inf_studio_tab', 'influencer')
               setActiveTab('Wardrobe')

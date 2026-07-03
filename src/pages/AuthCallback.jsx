@@ -54,7 +54,7 @@ export default function AuthCallback() {
           <div style={{ fontSize: 32, marginBottom: 16 }}>⚠️</div>
           <div style={{ fontSize: 16, fontWeight: 600, color: 'var(--text-primary)', marginBottom: 8 }}>Connection failed</div>
           <div style={{ fontSize: 14, color: 'var(--text-secondary)', marginBottom: 24 }}>{error}</div>
-          <button onClick={() => navigate('/settings')} style={{ padding: '10px 24px', borderRadius: 8, background: 'var(--text-primary)', color: '#fff', fontSize: 14, fontWeight: 600 }}>
+          <button onClick={() => navigate('/settings')} style={{ padding: '10px 24px', borderRadius: 8, background: 'var(--text-primary)', color: 'var(--bg)', fontSize: 14, fontWeight: 600 }}>
             Back to Settings
           </button>
         </div>

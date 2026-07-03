@@ -199,7 +199,37 @@ export function disconnectHF() {
     .forEach(k => localStorage.removeItem(k))
 }
 
-export async function refreshHFToken() {
+// Single-flight guard: Higgsfield rotates the refresh token on every use, so two
+// concurrent refreshes are fatal — the loser sends the now-stale token, gets a 400,
+// and disconnectHF() wipes the session. Generation flows fan out many parallel MCP
+// calls that can all hit 401 at once; they must share one refresh.
+let _refreshInFlight = null
+
+export function refreshHFToken() {
+  if (!_refreshInFlight) {
+    _refreshInFlight = doRefreshHFToken().finally(() => { _refreshInFlight = null })
+  }
+  return _refreshInFlight
+}
+
+// Cross-tab guard: the refresh token lives in localStorage shared by every tab, so
+// the same rotation race exists browser-wide. Serialize via the Web Locks API where
+// available (falls back to in-tab-only protection), and if another tab refreshed
+// while we waited on the lock, reuse its fresh token instead of rotating again.
+async function doRefreshHFToken() {
+  const tokenBefore = localStorage.getItem('hf_access_token')
+  const run = () => {
+    const current = localStorage.getItem('hf_access_token')
+    if (current && current !== tokenBefore) return current // another tab already refreshed
+    return performTokenRefresh()
+  }
+  if (typeof navigator !== 'undefined' && navigator.locks?.request) {
+    return navigator.locks.request('hf_token_refresh', run)
+  }
+  return run()
+}
+
+async function performTokenRefresh() {
   const refreshToken = localStorage.getItem('hf_refresh_token')
   const clientId = localStorage.getItem('hf_client_id')
   if (!refreshToken || !clientId) throw new Error('No refresh token — please reconnect in Settings')
