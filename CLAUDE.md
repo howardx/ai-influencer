@@ -70,6 +70,12 @@ Agent skills for Higgsfield workflows live in `.agents/skills/`
 - Don't refactor `Influencers.jsx` casually. It's 4,700+ lines and the
   state is tangled; any split needs its own dedicated session with
   in-browser verification of every flow.
+- **Never bypass local history or the pre-commit hook.** Commits go
+  through local git so `.githooks/pre-commit` runs the test suite —
+  no `--no-verify`, and no GitHub MCP file-push APIs (`push_files`,
+  `create_or_update_file`) that write to the remote directly. Use the
+  MCP for PRs, issues, reviews, and verification; use local git to
+  commit and push.
 
 ## Dev workflow
 

@@ -1,6 +1,6 @@
 ---
 name: photo-studio-influencer-guide
-description: Prompt strategy for Photo Studio — reference-driven editing with GPT Image 2. Always has @image1 (identity) and usually @image2 (outfit). Prompt is short and directive: placement and action only, no re-description of what's in the refs.
+description: "Prompt strategy for Photo Studio — reference-driven editing with GPT Image 2. Always has @image1 (identity) and usually @image2 (outfit). Prompt is short and directive: placement and action only, no re-description of what's in the refs."
 ---
 
 # Photo Studio — Prompt Engine Guide
