@@ -951,7 +951,6 @@ function GeneratingScreen({ genProgress, model, aspectRatio, landscape, hasRef =
   }, [])
 
   const barGradient = isDipping ? 'linear-gradient(90deg,#F59E0B,#EF4444)' : 'linear-gradient(90deg,#EC4899,#8B5CF6)'
-  const textGradient = isDipping ? 'linear-gradient(135deg,#F59E0B,#EF4444)' : 'linear-gradient(135deg,#EC4899,#8B5CF6)'
   const statusLabel = isDipping ? 'recalibrating...' : fakeProgress >= 88 ? 'almost there...' : 'generating...'
 
   return (

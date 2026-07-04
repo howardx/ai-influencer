@@ -2,6 +2,15 @@
 # Run the unit test suite before every commit; a failing suite blocks the commit.
 # Bypass in an emergency with: git commit --no-verify
 
+echo "pre-commit: linting..."
+npx eslint . --max-warnings 20
+status=$?
+if [ $status -ne 0 ]; then
+  echo ""
+  echo "pre-commit: lint failed — commit blocked. (bypass once with 'git commit --no-verify')"
+  exit $status
+fi
+
 echo "pre-commit: running unit tests..."
 npx vitest run
 status=$?

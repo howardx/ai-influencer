@@ -443,8 +443,6 @@ try {
   }
 } catch (_) {}
 
-const TEMPLATE_IDS = new Set(['kayla-template', 'camila-template', 'marcus-template'])
-
 export function StoreProvider({ children }) {
   const influencerStore = useInfluencerStore([KAYLA_SEED, CAMILA_SEED, MARCUS_SEED])
   const inspirationState = useLocalStorage('inspiration_boards', [])

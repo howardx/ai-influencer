@@ -2,8 +2,6 @@ import { useState, useRef, useEffect, useMemo } from 'react'
 import { createPortal } from 'react-dom'
 import { useLocation, useNavigate } from 'react-router-dom'
 import { useInfluencers, useBrandDeals, generateId } from '../store'
-import ImageGrid from '../components/ImageGrid'
-import MasonryGrid from '../components/MasonryGrid'
 import Lightbox from '../components/Lightbox'
 import { compressImage, downloadImage } from '../utils/imageUtils'
 import { generateSingleImage, generateThreeImages, generateVideo, initSession, pollAllJobs, getPendingGens, clearPendingGen, getPendingVideo, clearPendingVideo, resumeVideoJob, isCancelError } from '../utils/higgsfieldGenerate'
@@ -931,9 +929,6 @@ function FL({ children }) {
 function FI({ value, onChange, placeholder }) {
   return <input value={value} onChange={onChange} placeholder={placeholder} style={{width:'100%',padding:'10px 14px',borderRadius:'var(--radius-sm)',border:'1.5px solid var(--border)',background:'var(--bg)',fontSize:14,color:'var(--text-primary)'}}/>
 }
-function FTA({ value, onChange, placeholder, rows=3 }) {
-  return <textarea value={value} onChange={onChange} placeholder={placeholder} rows={rows} style={{width:'100%',padding:'10px 14px',borderRadius:'var(--radius-sm)',border:'1.5px solid var(--border)',background:'var(--bg)',fontSize:14,color:'var(--text-primary)',resize:'vertical',lineHeight:1.6}}/>
-}
 
 // ─────────────────────────────────────────────
 // Gender buttons
@@ -991,7 +986,6 @@ function ColorPalette({ palette=[], onChange, gender }) {
 // ─────────────────────────────────────────────
 // Video URL helpers (used in scripts)
 function ytId(u){ return u?.match(/(?:youtu\.be\/|youtube\.com\/watch\?v=)([\w-]+)/)?.[1]??null }
-function domain(u){ try{return new URL(u).hostname.replace('www.','')}catch{return'link'} }
 
 // ─────────────────────────────────────────────
 // Scripts section
@@ -1112,12 +1106,6 @@ function ScriptsSection({ scripts=[], influencerPrompt='', onChange, initialExpa
     if (Array.isArray(s.videoUrls)) return s.videoUrls
     if (s.videoUrl) return [s.videoUrl]
     return []
-  }
-  function setUrl(s, vi, val) {
-    const cur = getUrls(s); const urls = [...cur]
-    while (urls.length <= vi) urls.push('')
-    urls[vi] = val
-    upd(s.id, 'videoUrls', urls)
   }
   function fmtDate(ts) {
     if (!ts) return ''
@@ -1613,38 +1601,6 @@ function DescriptionForm({ influencer, onUpdate }) {
 // ─────────────────────────────────────────────
 // Wardrobe generator
 
-const WARDROBE_STYLES_F = [
-  { id: 'old_money',    label: 'Old Money',    icon: '🏛', outfit: 'ivory cashmere turtleneck, tailored wide-leg cream trousers, tan leather loafers, minimal gold jewelry',                                   hair: 'sleek low chignon' },
-  { id: 'clean_girl',   label: 'Clean Girl',   icon: '🫧', outfit: 'fitted white ribbed tank top, straight-leg light-wash jeans, simple gold hoops, clean white sneakers',                                    hair: 'slicked-back low bun' },
-  { id: 'streetwear',   label: 'Streetwear',   icon: '🧢', outfit: 'oversized washed graphic hoodie, baggy wide-leg cargo pants, chunky platform sneakers',                                                   hair: 'messy space buns' },
-  { id: 'glam',         label: 'Glam',         icon: '✨', outfit: 'strapless sequin bodycon mini dress, strappy barely-there heels, small diamond studs',                                                    hair: 'bouncy blowout with voluminous waves' },
-  { id: 'cottagecore',  label: 'Cottagecore',  icon: '🌸', outfit: 'white floral prairie dress with puffed sleeves, brown Mary Jane flats, wicker bag',                                                       hair: 'loose romantic braids with small dried flowers' },
-  { id: 'y2k',          label: 'Y2K',          icon: '💿', outfit: 'pink butterfly-print crop top, ultra low-rise denim mini skirt, chunky platform sneakers, tinted micro sunglasses',                       hair: 'half-up pigtails with butterfly clips' },
-  { id: 'editorial',    label: 'Editorial',    icon: '🖤', outfit: 'oversized sharp black structured blazer worn as a dress belted at waist, knee-high patent leather boots',                                  hair: 'sleek straight blowout' },
-  { id: 'bohemian',     label: 'Bohemian',     icon: '🌿', outfit: 'cream linen wide-sleeve blouse, rust-toned flowy maxi skirt, leather flat sandals, layered gold necklaces, stacked bracelets',            hair: 'loose undone beachy waves' },
-  { id: 'sporty',       label: 'Sporty',       icon: '⚡', outfit: 'fitted cropped sports bra, high-waist seamless flare leggings, clean white training sneakers',                                             hair: 'sleek high ponytail' },
-  { id: 'dark_moody',   label: 'Dark & Moody', icon: '🌙', outfit: 'sheer black long-sleeve fitted top, black leather midi skirt, black pointed ankle boots, silver rings',                                    hair: 'sleek center-part straight hair' },
-  { id: 'coastal',      label: 'Coastal',      icon: '🌊', outfit: 'white linen button-down shirt loosely tied at waist, wide-leg cream linen trousers, tan leather flat sandals',                            hair: 'loose natural waves, sun-kissed' },
-  { id: 'preppy',       label: 'Preppy',       icon: '🎓', outfit: 'fitted navy polo shirt, plaid pleated mini skirt, white knee-high socks, brown penny loafers',                                            hair: 'low twin braids with ribbon ties' },
-]
-
-const WARDROBE_STYLES_M = [
-  { id: 'old_money',    label: 'Old Money',    icon: '🏛', outfit: 'navy single-breasted blazer, crisp white oxford shirt, tailored beige chinos, tan leather loafers — no tie',                             hair: 'classic side-parted, neat and polished' },
-  { id: 'streetwear',  label: 'Streetwear',   icon: '🧢', outfit: 'oversized washed black graphic tee, baggy distressed denim jeans, clean white low-top sneakers',                                          hair: 'low skin fade, loose top' },
-  { id: 'tech_bro',    label: 'Tech Bro',     icon: '💻', outfit: 'heather grey quarter-zip fleece pullover, dark slim-fit chinos, minimalist clean white sneakers',                                          hair: 'neat, slightly tousled' },
-  { id: 'preppy',      label: 'Preppy',       icon: '🎓', outfit: 'pink Oxford button-down polo shirt, flat-front khaki chinos, brown penny loafers, leather belt',                                           hair: 'classic side part, well-groomed' },
-  { id: 'sporty',      label: 'Sporty',       icon: '⚡', outfit: 'fitted performance athletic training top, tapered jogger pants, premium running sneakers',                                                  hair: 'fresh skin fade, clean edges' },
-  { id: 'business',    label: 'Business',     icon: '👔', outfit: 'slate blue slim-fit button-down shirt, dark tailored slim trousers, brown leather oxford shoes',                                           hair: 'neat, professional, combed' },
-  { id: 'coastal',     label: 'Coastal',      icon: '🌊', outfit: 'relaxed linen white shirt slightly unbuttoned at collar, navy linen shorts, tan boat shoes, no socks',                                    hair: 'natural, lightly wind-tousled' },
-  { id: 'editorial',   label: 'Editorial',    icon: '🖤', outfit: 'oversized black structured wool coat, slim black ribbed turtleneck, straight-leg black trousers, black leather Chelsea boots',              hair: 'slicked back, very sleek' },
-  { id: 'dark_moody',  label: 'Dark & Moody', icon: '🌙', outfit: 'washed black denim jacket over black band tee, black slim-fit jeans, black creeper boots, silver chain necklace',                         hair: 'undone, messy, slightly overgrown' },
-  { id: 'bohemian',    label: 'Bohemian',     icon: '🌿', outfit: 'loose cream linen shirt open at chest, wide-leg natural linen trousers, leather sandals, stacked wooden and silver bracelets',             hair: 'loose natural curls or waves' },
-  { id: 'y2k',         label: 'Y2K',          icon: '💿', outfit: 'baggy vintage colour-block windbreaker, wide-leg track pants, chunky dad sneakers, fitted cap',                                            hair: 'buzz cut or tight cornrows' },
-  { id: 'party',       label: 'Party Night',  icon: '🪩', outfit: 'black satin shirt open two buttons, slim-fit black tailored trousers, sleek black loafers, silver watch',                                  hair: 'slicked back, polished' },
-]
-
-const HAIR_PRESETS_F = ['Sleek bun', 'High ponytail', 'Beach waves', 'Blowout', 'Space buns', 'Braids', 'Half-up', 'Curtain bangs', 'Slicked back', 'Natural curls', 'Pixie cut', 'Bob']
-const HAIR_PRESETS_M = ['Low fade', 'Side part', 'Buzz cut', 'Slicked back', 'Textured crop', 'Tousled', 'Undercut', 'Man bun', 'Cornrows', 'Afro', 'Shaved sides', 'French crop']
 
 function buildWardrobePrompt(influencer, { outfit, hair, customText }) {
   const phys = influencer.physicalDesc ? `The subject: ${influencer.physicalDesc}. ` : ''
@@ -2684,53 +2640,6 @@ const VOICE_PRESETS = {
   ],
 }
 
-const VIDEO_TEMPLATES = [
-  {
-    id: 'talking-head',
-    label: 'Talking Head',
-    icon: '🎤',
-    sub: 'Direct to camera, personal & engaging',
-    dialogue: "I need to tell you about something that completely changed my routine.",
-    envKey: 'Bedroom', environment: '',
-    camera: 'Handheld', vibe: 'Natural', duration: 8, shotMode: 'oner',
-  },
-  {
-    id: 'product-review',
-    label: 'Product Review',
-    icon: '⭐',
-    sub: 'Hold, show, and talk about a product',
-    dialogue: "Okay so I've been using this for two weeks and here's my honest take.",
-    envKey: 'Studio', environment: '',
-    camera: 'Close-up', vibe: 'Tutorial', duration: 12, shotMode: 'oner',
-  },
-  {
-    id: 'grwm',
-    label: 'GRWM',
-    icon: '✨',
-    sub: 'Get Ready With Me — casual beauty content',
-    dialogue: "Get ready with me for tonight — I have a whole thing planned.",
-    envKey: 'Bathroom', environment: '',
-    camera: 'Handheld', vibe: 'Playful', duration: 10, shotMode: 'oner',
-  },
-  {
-    id: 'brand-collab',
-    label: 'Brand Collab',
-    icon: '🤝',
-    sub: 'Polished partnership announcement',
-    dialogue: "I partnered with a brand that actually aligns with how I live.",
-    envKey: 'Street', environment: '',
-    camera: 'Slow push-in', vibe: 'Confident', duration: 12, shotMode: 'oner',
-  },
-]
-
-const DIALOGUE_STARTERS = [
-  "I need to tell you about something—",
-  "Okay so I've been obsessed with this—",
-  "This is my honest review:",
-  "Can we talk about this for a second?",
-  "I wasn't going to post this but—",
-  "Three things I noticed after one week:",
-]
 
 const CAMERA_META = {
   'Handheld':     { label: 'Handheld' },
@@ -3823,7 +3732,6 @@ function ContentStudio({ influencer, onUpdate, onSaveToScripts, onGenerated, res
   const [genProgress, setGenProgress] = useState(0)
   const [genError, setGenError] = useState(null)
   const [genResults, setGenResults] = useState(() => { try { return JSON.parse(localStorage.getItem(`hf_gen_results_${influencer.id}`) || '[]') } catch { return [] } })
-  const [genShareUrls, setGenShareUrls] = useState([])
   const [elapsed, setElapsed] = useState(0)
   const elapsedRef = useRef(null)
   const [showPrompt, setShowPrompt] = useState(false)
@@ -3939,7 +3847,7 @@ function ContentStudio({ influencer, onUpdate, onSaveToScripts, onGenerated, res
     setElapsed(0)
     setGenResults((() => { try { return JSON.parse(localStorage.getItem(`hf_gen_results_${influencer.id}`) || '[]') } catch { return [] } })())
     setGenError(null)
-  }, [influencer.id]) // eslint-disable-line
+  }, [influencer.id])  
 
   // One-time migration: if hf_gen_results_* has URLs not yet in generationHistory, add them.
   // This recovers videos that were generated but lost because the user switched influencers mid-generation.
@@ -3978,7 +3886,7 @@ function ContentStudio({ influencer, onUpdate, onSaveToScripts, onGenerated, res
     elapsedRef.current = setInterval(() => setElapsed(Math.floor((Date.now() - savedStart) / 1000)), 1000)
     resumeVideoJob(pending.jobIds, pending.count, setGenProgress, partials => { if (!cancelRef.current && genEpochRef.current === myEpoch) persistGenResults([...partials]) }, () => cancelRef.current || genEpochRef.current !== myEpoch)
       .then(result => {
-        if (!cancelRef.current && genEpochRef.current === myEpoch) { persistGenResults(result.urls); setGenShareUrls(result.shareUrls || []) }
+        if (!cancelRef.current && genEpochRef.current === myEpoch) persistGenResults(result.urls)
         const histUrls = [...new Set(result.urls.filter(Boolean))]
         if (histUrls.length && genEpochRef.current === myEpoch) savedOnGenerated?.(histUrls, currentSettingsSnapshot())
       })
@@ -4078,8 +3986,6 @@ function ContentStudio({ influencer, onUpdate, onSaveToScripts, onGenerated, res
   }
 
   function buildPrompt() {
-    const name = influencer.name
-    const phys = influencer.physicalDesc || `${name}, natural confident energy`
     const isMale = influencer.gender === 'Male'
     const she = isMale ? 'he' : 'she'
     const She = isMale ? 'He' : 'She'
@@ -4429,15 +4335,6 @@ ${shotsWithBeats.join('\n\n')}`
     setLastGeneratedPrompt(buildPrompt())
   }, [promptRecomputeTick]) // eslint-disable-line react-hooks/exhaustive-deps
 
-  function applyTemplate(t) {
-    setDialogue(t.dialogue)
-    setEnvKey(t.envKey)
-    setEnvironment(t.envKey ? (CS_ENV_PRESETS[t.envKey] || t.envKey) : (t.environment || ''))
-    setCamera(t.camera)
-    setVibe(t.vibe)
-    setDuration(t.duration)
-    setShotMode(t.shotMode)
-  }
 
   function cancelGeneration() {
     cancelRef.current = true
@@ -4459,7 +4356,6 @@ ${shotsWithBeats.join('\n\n')}`
     setGenerating(true)
     setGenError(null)
     setGenResults([])
-    setGenShareUrls([])
     try { localStorage.removeItem(`hf_gen_results_${influencer.id}`) } catch {}
     setGenProgress(0)
     setElapsed(0)
@@ -4486,10 +4382,7 @@ ${shotsWithBeats.join('\n\n')}`
         isCancelled: () => cancelRef.current || genEpochRef.current !== myEpoch,
         pendingKey: influencer.id,
       })
-      if (!cancelRef.current && genEpochRef.current === myEpoch) {
-        persistGenResults(result.urls)
-        setGenShareUrls(result.shareUrls || [])
-      }
+      if (!cancelRef.current && genEpochRef.current === myEpoch) persistGenResults(result.urls)
       const histUrls = [...new Set(result.urls.filter(Boolean))]
       if (histUrls.length && genEpochRef.current === myEpoch) savedOnGenerated?.(histUrls, currentSettingsSnapshot())
     } catch (e) {
@@ -5880,7 +5773,7 @@ export default function Influencers() {
     setActiveTab('Overview')
     setScriptsHighlightId(null)
     hasNavigatedToScripts.current = false
-  }, [influencer?.id]) // eslint-disable-line
+  }, [influencer?.id])  
 
   const topImages=influencer?[influencer.mainImage,influencer.characterSheetImage,influencer.closeUpImage1,influencer.closeUpImage2].filter(Boolean):[]
 

@@ -29,10 +29,6 @@ const TIME_CONFIGS = [
   },
 ]
 
-function getTimesForNiche() {
-  return TIME_CONFIGS
-}
-
 // ── Soul-safe poses — simple natural descriptions Soul can follow ─
 // Higgsfield Soul struggles with detailed spatial pose instructions,
 // so these strip body-angle / weight / hand geometry down to a natural feel cue.
@@ -859,15 +855,6 @@ export function getBackstoryContext(physicalDesc, backstory) {
   return { tags, sceneNiche, buildHint, physicalDetail, lockedScene }
 }
 
-// Personality energy → wardrobe energy window
-// Introvert = quieter clothes, extrovert = bolder clothes
-// Window has overlap so selection isn't too rigid
-function getEnergyWindow(personality) {
-  const center = personality // 0–100 maps directly
-  const half = 28            // ±28 tolerance around the center
-  return { min: Math.max(0, center - half), max: Math.min(100, center + half) }
-}
-
 // Personality styling note — appended to wardrobe to describe HOW it's worn
 function getStylingNote(personality) {
   if (personality < 25) return 'Worn without deliberateness — clothes exist, not styled.'
@@ -1090,7 +1077,7 @@ function buildSkinBlock(timeLabel, gender, physicalDesc) {
   return `— Visible individual pores across ${pronoun} T-zone, nose, and cheeks; pores on the lit side cast tiny directional micro-shadows from the key light
 — ${envReactions[timeLabel] || envReactions['overcast soft daylight']}
 — ${R(['a small healing blemish on the left jaw, slightly pinker than surrounding skin', 'faint asymmetric sun pigmentation near the right temple', 'two freckles placed asymmetrically across the nose and left cheek', 'a faint old thin scar below the right jawline — barely there, photographically real', 'slight horizontal pressure line across the forehead from a hat worn earlier'])}
-— Left brow sits marginally higher than the right; one nostril slightly narrower; cupid\'s bow peaks uneven — natural asymmetry throughout
+— Left brow sits marginally higher than the right; one nostril slightly narrower; cupid's bow peaks uneven — natural asymmetry throughout
 — Subtle digital sensor noise in the shadow areas consistent with iPhone auto-ISO`
 }
 

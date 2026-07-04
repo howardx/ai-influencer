@@ -1,6 +1,6 @@
-import { useState, useRef, useEffect, useCallback } from 'react'
+import { useState, useRef, useEffect } from 'react'
 import { createPortal } from 'react-dom'
-import { generateNImages, generatePosePreviews, generateSingleImage, savePendingPhoto, clearPendingPhoto, getPendingPhoto, pollAllJobs, hasPhotoGenSession, initSession, isCancelError } from '../utils/higgsfieldGenerate'
+import { generateNImages, generatePosePreviews, generateSingleImage, clearPendingPhoto, getPendingPhoto, pollAllJobs, hasPhotoGenSession, initSession, isCancelError } from '../utils/higgsfieldGenerate'
 import { downloadImage } from '../utils/imageUtils'
 import { isHFConnected } from '../utils/higgsfieldAuth'
 import { buildCharSheetPrompt, buildCharSheetPromptWithClaude } from '../utils/charSheetPrompt'
@@ -53,8 +53,6 @@ const HISTORY_KEY = 'photo_studio_history'
 const MAX_HISTORY = 500
 const GEN_DURATION_MS = 90000
 
-// Only portrait + square for Instagram
-const ASPECTS = ['9:16', '1:1']
 
 // Location gradient backgrounds — evokes the scene atmosphere
 const LOC_VISUAL = {
@@ -579,7 +577,7 @@ export default function PhotoStudioPanel({ influencer, onGoToWardrobe, onUseAsSt
       if (s.resolution)   setResolution(s.resolution)
       if (s.outputCount)  setOutputCount(s.outputCount)
     } catch {}
-  }, [influencer?.id, restoreKey]) // eslint-disable-line
+  }, [influencer?.id, restoreKey])  
 
   useEffect(() => {
     if (generating) {
@@ -757,22 +755,6 @@ export default function PhotoStudioPanel({ influencer, onGoToWardrobe, onUseAsSt
     setPropText('')
   }
 
-  function doReset() {
-    setLocation(null)
-    setTimeOfDay('morning')
-    setPose('front')
-    setStance('standing')
-    setOutfitPreset('current')
-    setWardrobeText('')
-    setExpression('natural')
-    setPropText('')
-    setPropSlots([null, null, null])
-    setAspectRatio('9:16')
-    setResolution('4k')
-    setRightMode('location')
-    setCurrentImgs([])
-    setError(null)
-  }
 
   const isCustomLoc  = !!location && !LOCATIONS.some(l => l.id === location)
   const isActivelyGenerating = generating && generatingForIdRef.current === influencer?.id
@@ -797,10 +779,6 @@ export default function PhotoStudioPanel({ influencer, onGoToWardrobe, onUseAsSt
     k.startsWith(`${stance}_`) || (stance === 'standing' && !k.includes('_'))
   )
 
-  const outputDims =
-    aspectRatio === '9:16' ? { maxWidth: 320, aspectRatio: '9/16' } :
-    aspectRatio === '16:9' ? { maxWidth: 480, aspectRatio: '16/9' } :
-                             { maxWidth: 480, aspectRatio: '1/1'   }
 
   const chipStyle = (active) => ({
     padding: '6px 13px', borderRadius: 980, fontSize: 12, fontWeight: active ? 600 : 500,
@@ -810,10 +788,6 @@ export default function PhotoStudioPanel({ influencer, onGoToWardrobe, onUseAsSt
     cursor: 'pointer', transition: 'all 0.12s', fontFamily: 'inherit',
   })
 
-  const rowLabel = {
-    fontSize: 10, fontWeight: 700, color: 'var(--text-secondary)',
-    textTransform: 'uppercase', letterSpacing: '0.6px', marginBottom: 7, display: 'block',
-  }
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
