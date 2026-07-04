@@ -11,7 +11,7 @@ export const CANCEL_MESSAGE = 'CANCELLED'
 export const isCancelError = e => e?.message === CANCEL_MESSAGE
 
 // Flip to true while diagnosing Higgsfield issues — verbose request/response logs
-const HF_DEBUG = false
+const HF_DEBUG = true // TEMP: pairing-session observation — revert before commit
 const hflog = (...a) => { if (HF_DEBUG) console.log('[HF]', ...a) }
 
 let _sessionId = null

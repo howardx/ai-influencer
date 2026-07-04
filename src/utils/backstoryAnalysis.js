@@ -1,3 +1,5 @@
+import { reportClaudeAuthFailure } from './claudeHealth'
+
 const CLAUDE_KEY = 'claude_api_key'
 
 const SYSTEM = `You are a visual prompt assistant for an AI influencer image generator.
@@ -34,6 +36,7 @@ export async function analyzeBackstory(backstory, physicalDesc) {
     })
 
     if (!res.ok) {
+      reportClaudeAuthFailure(res.status)
       console.error('[Claude] HTTP error', res.status, await res.text().catch(() => ''))
       return null
     }

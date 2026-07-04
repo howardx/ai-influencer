@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi } from 'vitest'
 import {
   getBackstoryContext,
   buildPromptInput,
@@ -109,6 +109,40 @@ describe('buildDirectPrompt', () => {
   it('uses the profession locked scene when backstory-locked', () => {
     const out = buildDirectPrompt(kayla, null, { backstoryLocked: true })
     expect(out).toContain('yoga studio')
+  })
+})
+
+describe('prop placement consistency', () => {
+  // A prop must be placed by exactly ONE instruction. The old composition gave
+  // the model up to three conflicting placements: the prop string's own
+  // ("held loosely at the side"), the pose template's ("held in both hands at
+  // chest height"), and the propDesc suffix ("held in one hand").
+  it('mentions a forced prop exactly once (plandid pose)', () => {
+    const out = buildDirectPrompt({ ...kayla, personality: 40, backstory: '' }, null, { forceProp: 'TESTPROP-XYZ' })
+    expect((out.match(/TESTPROP-XYZ/g) || []).length).toBe(1)
+  })
+
+  it('mentions a forced prop exactly once (contemplative pose)', () => {
+    const out = buildDirectPrompt({ ...kayla, personality: 10, backstory: '' }, null, { forceProp: 'TESTPROP-XYZ' })
+    expect((out.match(/TESTPROP-XYZ/g) || []).length).toBe(1)
+  })
+
+  it('mentions a non-drink prop exactly once in the candid pose', () => {
+    const rand = vi.spyOn(Math, 'random').mockReturnValue(0.9) // personality 90 → candid
+    try {
+      const out = buildDirectPrompt({ ...kayla, personality: 90, backstory: '' }, null, { forceProp: 'TESTPROP-XYZ' })
+      expect(out).toContain('mid-action')
+      expect((out.match(/TESTPROP-XYZ/g) || []).length).toBe(1)
+    } finally { rand.mockRestore() }
+  })
+
+  it('never appends the legacy contradictory propDesc suffix', () => {
+    for (let i = 0; i < 20; i++) {
+      for (const p of buildThreeVariationPrompts({ ...kayla, backstory: '' })) {
+        expect(p).not.toContain('held in one hand — no visible brand logo')
+        expect(p).not.toContain('hands in a natural mid-gesture, nothing held')
+      }
+    }
   })
 })
 

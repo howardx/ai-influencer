@@ -24,6 +24,30 @@ export default function Settings() {
   const [claudeKey, setClaudeKey] = useState(() => localStorage.getItem(CLAUDE_KEY) || '')
   const [claudeInput, setClaudeInput] = useState('')
   const [showClaudeInput, setShowClaudeInput] = useState(false)
+  const [keyTest, setKeyTest] = useState(null) // null | 'testing' | 'ok' | 'rejected' | 'error'
+
+  // One tiny (1-token) real API call — a rejected key otherwise fails silently
+  // deep inside generation flows where the user never sees it.
+  async function testClaudeKey() {
+    setKeyTest('testing')
+    try {
+      const res = await fetch('/api/claude', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'x-api-key': claudeKey },
+        body: JSON.stringify({ model: 'claude-haiku-4-5-20251001', max_tokens: 1, messages: [{ role: 'user', content: 'ping' }] }),
+      })
+      const data = await res.json().catch(() => ({}))
+      if (res.status === 401 || res.status === 403 || data?.error?.type === 'authentication_error' || data?.error?.type === 'forbidden') {
+        setKeyTest('rejected')
+      } else if (res.ok && !data.error) {
+        setKeyTest('ok')
+      } else {
+        setKeyTest('error')
+      }
+    } catch {
+      setKeyTest('error')
+    }
+  }
   useEffect(() => {
     const params = new URLSearchParams(location.search)
     if (params.get('connected') === '1') {
@@ -133,13 +157,25 @@ export default function Settings() {
                   <div style={{ width: 7, height: 7, borderRadius: '50%', background: '#34C759' }} />
                   <span style={{ fontSize: 13, fontWeight: 600, color: '#34C759' }}>Claude connected</span>
                   <span style={{ fontSize: 12, color: 'var(--text-secondary)' }}>···{claudeKey.slice(-4)}</span>
+                  {keyTest === 'ok' && <span style={{ fontSize: 12, fontWeight: 600, color: '#34C759' }}>✓ key works</span>}
+                  {keyTest === 'rejected' && <span style={{ fontSize: 12, fontWeight: 600, color: '#FF3B30' }}>✗ key rejected — use an API key from console.anthropic.com</span>}
+                  {keyTest === 'error' && <span style={{ fontSize: 12, fontWeight: 600, color: '#FF9500' }}>couldn't verify — try again</span>}
                 </div>
-                <button
-                  onClick={() => { localStorage.removeItem(CLAUDE_KEY); setClaudeKey(''); setClaudeInput(''); setShowClaudeInput(false) }}
-                  style={{ padding: '7px 14px', borderRadius: 8, fontSize: 13, color: '#FF3B30', background: 'rgba(255,59,48,0.08)', border: '1px solid rgba(255,59,48,0.18)', fontWeight: 500 }}
-                >
-                  Remove
-                </button>
+                <div style={{ display: 'flex', gap: 8 }}>
+                  <button
+                    onClick={testClaudeKey}
+                    disabled={keyTest === 'testing'}
+                    style={{ padding: '7px 14px', borderRadius: 8, fontSize: 13, color: 'var(--text-primary)', background: 'var(--bg-tertiary)', border: '1px solid var(--border)', fontWeight: 500, cursor: 'pointer' }}
+                  >
+                    {keyTest === 'testing' ? 'Testing…' : 'Test key'}
+                  </button>
+                  <button
+                    onClick={() => { localStorage.removeItem(CLAUDE_KEY); setClaudeKey(''); setClaudeInput(''); setShowClaudeInput(false); setKeyTest(null) }}
+                    style={{ padding: '7px 14px', borderRadius: 8, fontSize: 13, color: '#FF3B30', background: 'rgba(255,59,48,0.08)', border: '1px solid rgba(255,59,48,0.18)', fontWeight: 500 }}
+                  >
+                    Remove
+                  </button>
+                </div>
               </div>
             </div>
           ) : showClaudeInput ? (

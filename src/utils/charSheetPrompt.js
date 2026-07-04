@@ -1,3 +1,5 @@
+import { reportClaudeAuthFailure } from './claudeHealth'
+
 export function buildInfluencerSheetPrompt(inf) {
   const phys = inf.physicalDesc ? `The character: ${inf.physicalDesc}. ` : ''
   const style = inf.clothingStyle ? `Outfit: ${inf.clothingStyle}. ` : ''
@@ -67,7 +69,10 @@ Output only valid JSON. No explanation, no markdown.` },
     }),
   })
 
-  if (!res.ok) throw new Error(`Claude analysis failed (${res.status})`)
+  if (!res.ok) {
+    reportClaudeAuthFailure(res.status)
+    throw new Error(`Claude analysis failed (${res.status})`)
+  }
   const data = await res.json()
   if (data.error) throw new Error(data.error.message)
 

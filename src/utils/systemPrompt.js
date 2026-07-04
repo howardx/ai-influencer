@@ -44,7 +44,7 @@ const POSES = {
   contemplative: prop => `body facing 45° away from camera, weight forward on one leg. ${prop ? `${prop} held loosely at the side, almost forgotten` : 'hands relaxed loosely in front, fingers barely interlaced'}. Head turned back toward the lens mid-thought, eyes glancing toward but not fully meeting it — somewhere else mentally. A quiet, inward expression — not performing.`,
   plandid: prop => `body angled 25–30° to camera, weight settled on the back leg, hips slightly offset. ${prop ? `${prop} held naturally in one hand, wrist relaxed` : 'one hand mid-loose-gesture near the hip, the other hanging naturally'}. Eyes glancing down-and-off-axis, 15° away from lens. Expression caught mid-thought — a specific private moment. The "noticed the camera half a second ago" framing.`,
   posed_cute: prop => `body in soft 3/4 angle to camera, shoulders relaxed and slightly dropped. ${prop ? `${prop} held in both hands at chest height, elbows soft` : 'one hand gently touching the side of the jaw, fingers loose and natural'}. Eyes meeting the lens with a quiet small expression — a half-smile just forming, not fully committed. Posing but acting like she isn't.`,
-  candid: prop => `mid-action — caught at the apex of ${prop && DRINK_PROP_PATTERN.test(prop) ? `bringing the ${prop} toward the mouth, mid-sip, body naturally leaning slightly forward` : 'a genuine mid-laugh or bright spontaneous expression, body and shoulders caught in motion, one hand mid-gesture near the chest'}. Eyes looking directly toward the lens — spontaneous, unguarded eye contact full of real energy. Not posed, not looking away — the camera caught them in a real moment while they were already looking at it.`,
+  candid: prop => `mid-action — caught at the apex of ${prop && DRINK_PROP_PATTERN.test(prop) ? `bringing the ${prop} toward the mouth, mid-sip, body naturally leaning slightly forward` : prop ? `a genuine mid-laugh or bright spontaneous expression, body and shoulders caught in motion, ${prop} held loosely in one hand` : 'a genuine mid-laugh or bright spontaneous expression, body and shoulders caught in motion, one hand mid-gesture near the chest'}. Eyes looking directly toward the lens — spontaneous, unguarded eye contact full of real energy. Not posed, not looking away — the camera caught them in a real moment while they were already looking at it.`,
 }
 
 function getPoseFromPersonality(p) {
@@ -1026,19 +1026,23 @@ function isDrinkProp(prop) {
   return !!prop && DRINK_PROP_PATTERN.test(prop)
 }
 
+// Object descriptions ONLY — no hand/placement language. Placement is owned
+// exclusively by the pose template that embeds the prop; a prop string carrying
+// its own "held at the side" fights the pose's "held in both hands at chest
+// height" and the model renders the contradiction.
 const UNIVERSAL_PROPS = [
   'iced matcha latte in a clear to-go cup, bright green, paper straw, slight condensation',
   'iced coffee in a clear coffee shop cup with a dome lid, paper straw',
   'iced latte in a clear cup, light brown, ice visible through the sides, paper straw',
   'stainless steel wide-mouth water bottle, no logo, condensation on the outside',
-  'small paper shopping bag held loosely at the side by the handles',
-  'small pebbled leather tote held at the crook of the arm',
-  'pair of clean sunglasses held loosely in one hand at the side',
-  'worn-in paperback, held loosely by the spine',
-  'small bouquet of dried or fresh flowers, stems in one hand',
-  'small wired earbuds just removed, held loosely in one hand',
-  'thin notebook held loosely under one arm',
-  'phone held loosely at the side, screen off',
+  'small paper shopping bag with handles',
+  'small pebbled leather tote',
+  'pair of clean sunglasses',
+  'worn-in paperback',
+  'small bouquet of dried or fresh flowers',
+  'small wired earbuds, just removed',
+  'thin notebook',
+  'phone, screen off',
   null, null, null,
 ]
 
@@ -1236,10 +1240,6 @@ export function buildDirectPrompt(d, forcePose = null, options = {}, aspectRatio
   const skinBlock = buildSkinBlock(timeConfig.label, gender, physical)
   const characterFraming = getCharacterFraming(personality)
 
-  const propDesc = prop
-    ? `${prop} held in one hand — no visible brand logo`
-    : 'hands in a natural mid-gesture, nothing held'
-
   const dailyCtxLine = ''
 
   // Backstory-locked physical additions: build type (if user left build blank) + profession marker
@@ -1258,7 +1258,7 @@ Scene: ${scene}${options.backstoryLocked && lockedScene ? '' : `, ${timeConfig.l
 
 Subject: ${gender}, ${age}, ${physical}${buildDesc}${physicalDetailStr}. ${characterFraming}.${dailyCtxLine} Natural micro-asymmetries in the face — this is a real iPhone photograph of a real person, not a 3D render or CGI. Real visible pore texture on the nose, cheeks, and forehead — and on all exposed skin including arms, neck, and shoulders. Zero skin smoothing anywhere on the body, zero airbrushing, zero beauty filter applied.
 
-Pose: ${poseFn(prop)} ${propDesc}.
+Pose: ${poseFn(prop)}
 
 Wardrobe & details: ${wardrobe}
 
