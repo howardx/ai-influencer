@@ -6,3 +6,6 @@ dist
 
 # Playwright MCP outputs (screenshots, snapshots, logs)
 .playwright-mcp/
+
+
+commercials/

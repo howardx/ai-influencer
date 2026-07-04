@@ -56,6 +56,51 @@ describe('validateTunedPrompt', () => {
     expect(validateTunedPrompt(ORIGINAL, changedFormat, { dialogueLines: DIALOGUE }).ok).toBe(false)
   })
 
+  it('protects feature gesture beats — a tune that rewrites or drops one is rejected', () => {
+    const beat = '— as she says this, she raises @image_5 beside her face, taps the hidden air vent once with one index fingertip, then holds @image_5 toward the lens for a beat: the hidden air vent centered, fully visible, in sharp focus.'
+    const original = ORIGINAL.replace('she touches @image_5 and angles toward camera.', `"这个口罩上脸很舒服。" ${beat}`)
+    // faithful tune keeps the beat verbatim → accepted
+    const good = original.replace('handheld moving.\nOne breath', 'slow push in — Movement: eases toward her. Speed: gradual.\nOne breath')
+    expect(validateTunedPrompt(original, good, { dialogueLines: DIALOGUE }).ok).toBe(true)
+    // tune that rewords the gesture → rejected
+    const reworded = good.replace('taps the hidden air vent once with one index fingertip', 'gestures at the vent')
+    expect(validateTunedPrompt(original, reworded, { dialogueLines: DIALOGUE }).ok).toBe(false)
+    // tune that drops the whole beat → rejected
+    const dropped = good.replace(` ${beat}`, '')
+    expect(validateTunedPrompt(original, dropped, { dialogueLines: DIALOGUE }).ok).toBe(false)
+  })
+
+  it('protects user direction notes ("— at this moment, …")', () => {
+    const note = '— at this moment, she steps into the light and the wind lifts her hair.'
+    const original = ORIGINAL.replace('Voice unhurried.', `Voice unhurried. ${note}`)
+    expect(validateTunedPrompt(original, original, { dialogueLines: DIALOGUE }).ok).toBe(true)
+    expect(validateTunedPrompt(original, original.replace(note, '— at this moment, she moves.'), { dialogueLines: DIALOGUE }).ok).toBe(false)
+  })
+
+  it('protects a note past its first internal period', () => {
+    const note = '— at this moment, she steps out. sun hits her face.'
+    const original = ORIGINAL.replace('Voice unhurried.', `Voice unhurried. ${note}`)
+    const tailRewritten = original.replace('sun hits her face.', 'light changes.')
+    expect(validateTunedPrompt(original, tailRewritten, { dialogueLines: DIALOGUE }).ok).toBe(false)
+  })
+
+  it('requires the ENTIRE LOGIC RULE line verbatim, not just the marker', () => {
+    // rewording content inside LOGIC RULE (marker intact) must reject — this
+    // line carries the occlusion + anti-invention rules
+    const reworded = GOOD_TUNE.replace('@image_1 face is fixed.', '@image_1 face stays consistent.')
+    expect(reworded).toContain('LOGIC RULE:') // marker survives, content changed
+    expect(validateTunedPrompt(ORIGINAL, reworded, { dialogueLines: DIALOGUE }).ok).toBe(false)
+  })
+
+  it('protects oner-mode feature anchors and the occlusion rule', () => {
+    const anchor = 'When she reaches the line about the hidden air vent, she raises @image_5 beside her face, taps it once: fully visible, in sharp focus.'
+    const occl = 'When she points at or touches a product feature, her fingers never occlude it — the indicated detail stays fully visible to camera and matches @image_5 exactly.'
+    const original = ORIGINAL.replace('LOGIC RULE: @image_1 face is fixed.', `LOGIC RULE: @image_1 face is fixed. ${occl}`).replace('Voice unhurried.', `Voice unhurried. ${anchor}`)
+    expect(validateTunedPrompt(original, original, { dialogueLines: DIALOGUE }).ok).toBe(true)
+    expect(validateTunedPrompt(original, original.replace(anchor, 'She shows the vent.'), { dialogueLines: DIALOGUE }).ok).toBe(false)
+    expect(validateTunedPrompt(original, original.replace(occl, ''), { dialogueLines: DIALOGUE }).ok).toBe(false)
+  })
+
   it('only enforces dialogue lines the original contains verbatim (annotated lines are exempt)', () => {
     // annotateDialogue splits comma-pivot sentences, so the raw sentence never
     // appears contiguously in the prompt — a faithful tune must still pass.

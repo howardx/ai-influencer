@@ -52,6 +52,19 @@ describe('buildProductSection', () => {
     const out = buildProductSection({ product1: '@image_5', product2: '@image_6' })
     expect(out).toContain('@image_5 and @image_6 contribute ONLY the product')
   })
+
+  it('never plants feature ideas and explicitly forbids inventing them', () => {
+    const out = buildProductSection(
+      { product1: '@image_5', productDetail1: '@image_6' },
+      { detailNotes: { productDetail1: 'hidden air vent at the nose bridge' } },
+    )
+    // naming vents/openings in the boilerplate is what got an extra air hole
+    // painted onto a mask — the template itself must stay feature-neutral
+    expect(out).not.toContain('vents and openings')
+    expect(out).toContain('Never invent features')
+    expect(out).toContain('no added holes, vents, openings')
+    expect(out).toContain('Concealed features stay concealed')
+  })
 })
 
 describe('buildProductRules', () => {

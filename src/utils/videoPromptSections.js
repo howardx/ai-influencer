@@ -33,11 +33,15 @@ export function buildProductSection(tagMap, { wearMode = false, she = 'she', det
     const tag = tagMap[role]
     if (!tag || !tagMap.product1) return
     const note = (detailNotes[role] || '').trim()
-    pLines.push(`${tag} — close-up detail of ${tagMap.product1}, the SAME product photographed closer${note ? `: it depicts ${note}` : ''}. Use for fine feature accuracy — texture, stitching, seams, hidden vents and openings. Never a separate product; never an extra object in frame.`)
+    // Feature-neutral wording on purpose: an earlier version said "hidden
+    // vents and openings" here, and Seedance painted an extra air hole onto a
+    // mask whose vent is concealed — the template must never name feature
+    // types the references don't show.
+    pLines.push(`${tag} — close-up detail of ${tagMap.product1}, the SAME product photographed closer${note ? `: it depicts ${note}` : ''}. Use for fine feature accuracy. Never a separate product; never an extra object in frame.`)
   })
   pLines.push('')
   const allProdTags = prodEntries.map(e => e.tag).join(' and ')
-  pLines.push(`The product must appear identical in every frame — same label text and orientation, same colors, same proportions throughout. Never substituted, recolored, or modified. ${allProdTags} ${prodEntries.length > 1 ? 'contribute' : 'contributes'} ONLY the product — never the face, identity, wardrobe, environment, or color grade.`)
+  pLines.push(`The product must appear identical in every frame — same label text and orientation, same colors, same proportions throughout. Never substituted, recolored, or modified. Never invent features: no added holes, vents, openings, seams, stitching, logos, or markings that are not visible in the references. Concealed features stay concealed. ${allProdTags} ${prodEntries.length > 1 ? 'contribute' : 'contributes'} ONLY the product — never the face, identity, wardrobe, environment, or color grade.`)
   if (detailTags.length) {
     pLines.push(`Whenever the product is shown close, its details must match ${detailTags.join(' and ')} exactly.`)
   }

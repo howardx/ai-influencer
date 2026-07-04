@@ -5,6 +5,7 @@ import { useInfluencers, useBrandDeals, generateId } from '../store'
 import Lightbox from '../components/Lightbox'
 import { compressImage, downloadImage } from '../utils/imageUtils'
 import { splitDialogueSentences, distributeSentences } from '../utils/dialogueSplit'
+import { FEATURE_GESTURES, assignFeaturesToShots, featureGesturePhrase, weaveLineAnnotations, featureLogicRule, autoMatchFeatures, featureCameraLine } from '../utils/featureBeats'
 import { buildProductSection, buildProductRules } from '../utils/videoPromptSections'
 import { tuneVideoPrompt, getTunerModel, setTunerModel, getTunerModels } from '../utils/videoPromptTuner'
 import { getAiKey, getActiveProvider } from '../utils/aiProvider'
@@ -2096,7 +2097,7 @@ function HomeSection({ slots=[], onChange }) {
 // Brand deal card — WorldDropCard style with brand + category fields
 const GEN_DURATION_MS = 150000 // ~2m30s estimated total
 
-function BrandDealCard({ deal, editingBrand, editBrand, onEditBrand, onStartEdit, onCommitEdit, onCancelEdit, onImageChange, onNoteChange, onDelete, onCategoryChange, onLightbox, generating, progress, claudeStatus, onGenerate }) {
+function BrandDealCard({ deal, editingBrand, editBrand, onEditBrand, onStartEdit, onCommitEdit, onCancelEdit, onImageChange, onNoteChange, onFeaturesChange, onDelete, onCategoryChange, onLightbox, generating, progress, claudeStatus, onGenerate }) {
   const fileRef = useRef()
   const [hovered,setHovered]=useState(false)
   const [dragOver,setDragOver]=useState(false)
@@ -2279,6 +2280,41 @@ function BrandDealCard({ deal, editingBrand, editBrand, onEditBrand, onStartEdit
             placeholder="What does this image show? e.g. hidden air vent at the nose bridge"
             style={{fontSize:11,padding:'5px 8px',borderRadius:6,border:'1px solid var(--border)',background:'var(--bg-tertiary)'}}
           />
+        </div>
+      )}
+
+      {/* Feature highlights — gestures the influencer performs on the dialogue
+          line covering each feature (tagged per-sentence in the Video tab) */}
+      {deal.image && (
+        <div style={{padding:'6px 8px 0'}}>
+          {(deal.features||[]).map((f,i)=>(
+            <div key={f.id} style={{display:'flex',gap:4,alignItems:'center',marginBottom:4}}>
+              <BareInput
+                value={f.name}
+                onChange={e=>onFeaturesChange?.((deal.features||[]).map((x,xi)=>xi===i?{...x,name:e.target.value}:x))}
+                placeholder="feature, e.g. hidden air vent"
+                style={{flex:1,fontSize:11,padding:'4px 7px',borderRadius:6,border:'1px solid var(--border)',background:'var(--bg-tertiary)'}}
+              />
+              <select
+                value={f.gesture||'point'}
+                onChange={e=>onFeaturesChange?.((deal.features||[]).map((x,xi)=>xi===i?{...x,gesture:e.target.value}:x))}
+                onClick={e=>e.stopPropagation()}
+                title="How she indicates it"
+                style={{flexShrink:0,fontSize:10,fontWeight:600,padding:'4px 4px',borderRadius:6,border:'1px solid var(--border)',background:'var(--bg-tertiary)',color:'var(--text-secondary)',cursor:'pointer',fontFamily:'inherit',outline:'none'}}
+              >
+                {FEATURE_GESTURES.map(g=><option key={g} value={g}>{g}</option>)}
+              </select>
+              <button onClick={e=>{e.stopPropagation();onFeaturesChange?.((deal.features||[]).filter((_,xi)=>xi!==i))}} title="Remove feature" style={{
+                flexShrink:0,width:18,height:18,borderRadius:5,padding:0,border:'none',cursor:'pointer',
+                background:'rgba(255,59,48,0.08)',color:'#FF3B30',fontSize:11,lineHeight:1,
+              }}>×</button>
+            </div>
+          ))}
+          <button
+            onClick={e=>{e.stopPropagation();onFeaturesChange?.([...(deal.features||[]),{id:generateId(),name:'',gesture:'point'}])}}
+            style={{fontSize:10,fontWeight:700,padding:'3px 8px',borderRadius:6,cursor:'pointer',
+              background:'rgba(139,92,246,0.08)',color:'#8B5CF6',border:'1px dashed rgba(139,92,246,0.35)'}}
+          >+ Feature highlight</button>
         </div>
       )}
 
@@ -2567,6 +2603,7 @@ function BrandDealSection({ deals=[], onChange }) {
                    ...(opts?.keepSheet && imgs[0]===deal.image ? {} : {characterSheet:null})}
                 : {image:img, images:img?[img]:[], imageNotes:{}, characterSheet:null})}
               onNoteChange={(url,note)=>updateDeal(deal.id,{imageNotes:{...(deal.imageNotes||{}),[url]:note}})}
+              onFeaturesChange={features=>updateDeal(deal.id,{features})}
               onDelete={()=>deleteDeal(deal.id)}
               onCategoryChange={cat=>updateDeal(deal.id,{category:cat})}
               onLightbox={(imgs,start)=>setLightbox({images:imgs,start:start||0})}
@@ -3819,6 +3856,14 @@ function ContentStudio({ influencer, onUpdate, onSaveToScripts, onGenerated, res
   const productFileRef2 = useRef()
   const productFileRef3 = useRef()
   const [dialogue, setDialogue] = useState(() => { try { return JSON.parse(localStorage.getItem(`cs_settings_${influencer.id}`) || '{}').dialogue ?? '' } catch { return '' } })
+  // Sentence index → feature id from the active deal's feature highlights.
+  // Indices shift if sentences are added/removed mid-script; stale indices are
+  // pruned at prompt-build time, and the chips UI always shows current truth.
+  const [featureBySentence, setFeatureBySentence] = useState(() => { try { return JSON.parse(localStorage.getItem(`cs_settings_${influencer.id}`) || '{}').featureBySentence ?? {} } catch { return {} } })
+  const [featureMatchStatus, setFeatureMatchStatus] = useState(null) // null | 'matching' | 'done' | 'none' | 'failed'
+  // Sentence index → free-text direction note ("she steps into the shade") —
+  // woven into that line's shot as "— at this moment, …". Multi-shot only.
+  const [lineNotes, setLineNotes] = useState(() => { try { return JSON.parse(localStorage.getItem(`cs_settings_${influencer.id}`) || '{}').lineNotes ?? {} } catch { return {} } })
   const [envKey, setEnvKey] = useState(() => { try { return JSON.parse(localStorage.getItem(`cs_settings_${influencer.id}`) || '{}').envKey ?? '' } catch { return '' } })
   const [environment, setEnvironment] = useState(() => {
     try {
@@ -3908,6 +3953,8 @@ function ContentStudio({ influencer, onUpdate, onSaveToScripts, onGenerated, res
     setDialogue(s.dialogue ?? '')
     setVideoTimeOfDay(s.videoTimeOfDay ?? 'afternoon')
     setProductWorn(s.productWorn ?? false)
+    setFeatureBySentence(s.featureBySentence ?? {})
+    setLineNotes(s.lineNotes ?? {})
     try {
       const raw = JSON.parse(localStorage.getItem(`hf_video_history_${influencer.id}`) || '[]')
       // Scrub any base64 product refs that were saved by older versions — they bloat localStorage
@@ -4089,9 +4136,9 @@ function ContentStudio({ influencer, onUpdate, onSaveToScripts, onGenerated, res
   useEffect(() => {
     if (restoringRef.current) return
     try {
-      localStorage.setItem(`cs_settings_${influencer.id}`, JSON.stringify({ vibe, duration, aspect, outputs, resolution, shotMode, camera, envKey, envCustom: CS_ENV_PRESETS[envKey] ? '' : environment, voicePreset, voiceCustom, dialogue, videoTimeOfDay, productWorn }))
+      localStorage.setItem(`cs_settings_${influencer.id}`, JSON.stringify({ vibe, duration, aspect, outputs, resolution, shotMode, camera, envKey, envCustom: CS_ENV_PRESETS[envKey] ? '' : environment, voicePreset, voiceCustom, dialogue, videoTimeOfDay, productWorn, featureBySentence, lineNotes }))
     } catch {}
-  }, [influencer.id, vibe, duration, aspect, outputs, resolution, shotMode, camera, envKey, environment, voicePreset, voiceCustom, dialogue, videoTimeOfDay, productWorn])
+  }, [influencer.id, vibe, duration, aspect, outputs, resolution, shotMode, camera, envKey, environment, voicePreset, voiceCustom, dialogue, videoTimeOfDay, productWorn, featureBySentence, lineNotes])
 
   // Persist last prompt per influencer
   useEffect(() => {
@@ -4147,11 +4194,15 @@ function ContentStudio({ influencer, onUpdate, onSaveToScripts, onGenerated, res
     // Environment — in start frame mode the scene is locked to the start frame, not the text field
     const todLabel = { morning: 'morning', afternoon: 'afternoon', 'golden hour': 'golden hour', night: 'night' }[videoTimeOfDay] || ''
     const todSuffix = todLabel ? `, ${todLabel}` : ''
+    // Location text can be empty while a chip is still selected (e.g. restored
+    // history) — the chip's preset is authoritative before any generic fallback,
+    // or 'Street' silently becomes 'indoors'.
+    const envText = environment || (envKey ? (CS_ENV_PRESETS[envKey] || envKey) : '')
     const envDesc = startFrameUrl
       ? 'Continue from start frame — environment and lighting match @image_1 exactly throughout.'
       : tagMap.home
-        ? `${tagMap.home} for the location and environment setting.${environment ? ' ' + environment : ''}${todSuffix}`
-        : `${environment || (isTalkingHead ? 'in a studio' : 'indoors')}${todSuffix}`
+        ? `${tagMap.home} for the location and environment setting.${envText ? ' ' + envText : ''}${todSuffix}`
+        : `${envText || (isTalkingHead ? 'in a studio' : 'indoors')}${todSuffix}`
 
     // Mood arc
     const moodMap = {
@@ -4214,6 +4265,27 @@ function ContentStudio({ influencer, onUpdate, onSaveToScripts, onGenerated, res
     // per-shot dropped everything past shot N on longer scripts.
     const lineChunks = distributeSentences(dialogueLines, shotDurs)
 
+    // Feature highlights: sentences tagged in the Script step get a gesture
+    // beat woven into their shot, tied to the exact quoted line so the gesture
+    // lands as the line is spoken. `when` derives from the wear toggle — a
+    // worn mask can't be raised to camera, and a held one has no "worn side".
+    const dealFeatures = activeDealFeatures()
+    const featureMap = {}
+    if (prod1Tag) {
+      Object.entries(featureBySentence).forEach(([idx, fid]) => {
+        const f = dealFeatures.find(x => x.id === fid)
+        if (f && Number(idx) < dialogueLines.length) featureMap[Number(idx)] = { ...f, when: wearMode ? 'worn' : 'held' }
+      })
+    }
+    // A detail close-up whose note names the feature grounds the gesture visually.
+    const detailTagForFeature = f => {
+      const needle = f.name.trim().toLowerCase()
+      const hit = refsList.find(r => r.role.startsWith('productDetail') && (r.note || '').toLowerCase().includes(needle))
+      return hit ? tagMap[hit.role] : null
+    }
+    const shotFeatures = Object.keys(featureMap).length ? assignFeaturesToShots(lineChunks, featureMap) : lineChunks.map(() => null)
+    if (Object.keys(featureMap).length) productRules.push(featureLogicRule(prod1Tag, { she, her }))
+
     const shots = []
     let t = 0
     for (let i = 0; i < shotCount; i++) {
@@ -4221,29 +4293,57 @@ function ContentStudio({ influencer, onUpdate, onSaveToScripts, onGenerated, res
       const te = t + sd
       const ts = `0:${String(t).padStart(2,'0')} to 0:${String(te).padStart(2,'0')}`
 
+      const sf = shotFeatures[i] || null
+      // Per-line annotations for this shot: the feature gesture (at most one
+      // per shot) plus any user direction notes on this chunk's sentences.
+      const chunkOffset = lineChunks.slice(0, i).reduce((a, c) => a + c.length, 0)
+      const anns = {}
+      ;(lineChunks[i] || []).forEach((_, j) => {
+        const note = (lineNotes[chunkOffset + j] || '').trim()
+        if (note) anns[j] = { note }
+      })
+      if (sf) anns[sf.idxInChunk] = { ...(anns[sf.idxInChunk] || {}), gesturePhrase: featureGesturePhrase(sf.feature, { productTag: prod1Tag, detailTag: detailTagForFeature(sf.feature), she, her }) }
+      const hasAnns = Object.keys(anns).length > 0
+      const wovenBody = () => weaveLineAnnotations(lineChunks[i] || [], anns, { she })
+        + (sf ? featureCameraLine({ isHandheld, productTag: prod1Tag }) : '')
+
       if (shotMode === 'oner') {
         const startPin = startFrameUrl ? `Video opens at 0:00 as @image_1 exactly. ` : ''
         const actionBody = fullDialogue
           ? annotatedDialogue
           : startFrameUrl ? '' : `@image_1 faces camera. Eyes on lens at 0:00.`
-        const onerTail = fullDialogue ? ` Natural conversational gestures as ${she} speaks. End cleanly with the character holding a final pose, no talking or lip movement.` : ''
+        // Oner: dialogue is already quoted in full, so beats anchor to the line
+        // by description instead of re-quoting it (a repeated quote risks the
+        // model speaking the line twice).
+        const seenFeatureIds = new Set()
+        const onerBeats = Object.values(featureMap).filter(f => !seenFeatureIds.has(f.id) && seenFeatureIds.add(f.id))
+          .map(f => ` When ${she} reaches the line about the ${f.name}, ${she} ${featureGesturePhrase(f, { productTag: prod1Tag, detailTag: detailTagForFeature(f), she, her })}.`).join('')
+        const onerTail = fullDialogue ? `${onerBeats} Natural conversational gestures as ${she} speaks. End cleanly with the character holding a final pose, no talking or lip movement.` : ''
         shots.push(`ACTION:\n0:00 to 0:${String(duration).padStart(2,'0')} — ${framing}, ${lens}, ${move}. One continuous take.\n\n${startPin}${actionBody}${onerTail}`.trimEnd())
       } else if (i === 0) {
         const startPin = startFrameUrl ? `Video opens at 0:00 as @image_1 exactly. ` : ''
         const hookLine = (lineChunks[0] || []).join(' ')
-        const hookBody = hookLine ? annotateDialogue(hookLine, { productTag: prod1Tag, durationSecs: duration, isHandheld, wearMode, she, her, his }) : (startFrameUrl ? '' : `@image_1 faces camera. Eyes on lens at 0:00.`)
+        const hookBody = hasAnns
+          ? wovenBody()
+          : hookLine ? annotateDialogue(hookLine, { productTag: prod1Tag, durationSecs: duration, isHandheld, wearMode, she, her, his }) : (startFrameUrl ? '' : `@image_1 faces camera. Eyes on lens at 0:00.`)
         shots.push(`SHOT 1 — ${ts}, ${framing}, ${lens}, ${move}.\n${startPin}${hookBody}`.trimEnd())
       } else {
         const line = (lineChunks[i] || []).join(' ')
-        const gesture = prod1Tag && i === 1
-          ? (wearMode ? `${she} touches ${prod1Tag} and angles toward camera to show it` : `${she} tilts ${prod1Tag} toward camera slightly`)
-          : 'one hand lifts — palm-up, natural half-shrug'
-        // A shot with no dialogue must SAY so — an implied-talking shot with no
-        // script is exactly where Seedance invents its own lines.
-        const lineStr = line ? `"${line.trim()}" [beat — eyes stay on camera.] ` : `No dialogue in this shot — ${she} does not speak, lips still. [holds the moment.] `
         const closingTail = fullDialogue && i === shotCount - 1 ? ' End cleanly with the character holding a final pose, no talking or lip movement.' : ''
         const voiceTail = line ? ' Voice unhurried. Tone genuine.' : ''
-        shots.push(`SHOT ${i+1} — ${ts}, ${framing}, ${lens}, ${move}.\n@image_1 continues. ${gesture}. ${lineStr}${voiceTail}${closingTail}`.trimEnd())
+        if (hasAnns) {
+          // Annotated shot: the gesture beat / user note IS the shot's
+          // direction — no generic gesture on top (one movement per shot).
+          shots.push(`SHOT ${i+1} — ${ts}, ${framing}, ${lens}, ${move}.\n@image_1 continues. ${wovenBody()}${voiceTail}${closingTail}`.trimEnd())
+        } else {
+          const gesture = prod1Tag && i === 1
+            ? (wearMode ? `${she} touches ${prod1Tag} and angles toward camera to show it` : `${she} tilts ${prod1Tag} toward camera slightly`)
+            : 'one hand lifts — palm-up, natural half-shrug'
+          // A shot with no dialogue must SAY so — an implied-talking shot with no
+          // script is exactly where Seedance invents its own lines.
+          const lineStr = line ? `"${line.trim()}" [beat — eyes stay on camera.] ` : `No dialogue in this shot — ${she} does not speak, lips still. [holds the moment.] `
+          shots.push(`SHOT ${i+1} — ${ts}, ${framing}, ${lens}, ${move}.\n@image_1 continues. ${gesture}. ${lineStr}${voiceTail}${closingTail}`.trimEnd())
+        }
       }
       t = te
     }
@@ -4415,6 +4515,20 @@ ${shotsWithBeats.join('\n\n')}`
     return orderedRefs().map(r => r.url)
   }
 
+  // Feature highlights come from the deal that supplied product ref 1 (main
+  // image, gallery image, or generated character sheet) — matched by URL, the
+  // same live-resolution pattern as liveNoteFor.
+  function activeDealFeatures() {
+    if (!productRef1) return []
+    for (const deal of influencer.brandDeals || []) {
+      const imgs = deal.images?.length ? deal.images : (deal.image ? [deal.image] : [])
+      if (imgs.includes(productRef1) || deal.characterSheet === productRef1) {
+        return (deal.features || []).filter(f => f.name?.trim())
+      }
+    }
+    return []
+  }
+
   function saveToHistory() {
     const builtPrompt = buildPrompt()
     // Strip base64 product refs — they can be several MB each and blow the localStorage quota.
@@ -4442,7 +4556,10 @@ ${shotsWithBeats.join('\n\n')}`
 
   function restoreHistory(entry) {
     setDialogue(entry.dialogue || '')
-    setEnvironment(entry.environment || '')
+    // Older/slimmed entries can carry an envKey with no environment text —
+    // rebuild the preset text so the studio never shows a selected chip while
+    // the prompt would fall back to 'indoors'.
+    setEnvironment(entry.environment || (entry.envKey ? (CS_ENV_PRESETS[entry.envKey] || entry.envKey) : ''))
     setEnvKey(entry.envKey || '')
     setCamera(entry.camera || 'Handheld')
     setVibe(entry.vibe || '')
@@ -4775,6 +4892,83 @@ ${shotsWithBeats.join('\n\n')}`
               color: over ? '#FF3B30' : approaching ? '#F59E0B' : 'var(--text-tertiary)',
             }}>
               {words} words
+            </div>
+          )
+        })()}
+        {/* Feature highlights → dialogue lines. Tagging a sentence makes the
+            influencer point at / tap that feature as the line is spoken, with
+            the feature held fully visible to camera. */}
+        {(() => {
+          if (!dialogue.trim()) return null
+          const feats = activeDealFeatures()
+          const sentences = splitDialogueSentences(dialogue.trim())
+          if (!sentences.length || (shotMode === 'oner' && !feats.length)) return null
+          const runAutoMatch = async () => {
+            setFeatureMatchStatus('matching')
+            const res = await autoMatchFeatures({ features: feats, sentences })
+            if (!res.ok) { setFeatureMatchStatus('failed'); console.warn('[Features] auto-match failed:', res.reason); return }
+            setFeatureBySentence(res.mapping)
+            setFeatureMatchStatus(Object.keys(res.mapping).length ? 'done' : 'none')
+          }
+          return (
+            <div style={{marginTop:10,padding:'10px 12px',borderRadius:10,background:'var(--bg-tertiary)',border:'1px solid var(--border-subtle)'}}>
+              <div style={{display:'flex',alignItems:'center',gap:8,marginBottom:7}}>
+                <div style={{flex:1,fontSize:11,fontWeight:700,color:'var(--text-secondary)'}}>
+                  ✦ Line directions — {feats.length ? 'tag the line that covers each feature, and/or ' : ''}note what happens as a line is spoken
+                </div>
+                {feats.length > 0 && getAiKey() && (
+                  <button
+                    onClick={runAutoMatch}
+                    disabled={featureMatchStatus === 'matching'}
+                    title={`${getActiveProvider().label} reads the script (any language) and tags the sentence that covers each feature — you can still adjust the picks`}
+                    style={{flexShrink:0,fontSize:10,fontWeight:700,padding:'3px 9px',borderRadius:7,cursor:'pointer',fontFamily:'inherit',
+                      background:'rgba(139,92,246,0.1)',color:'#8B5CF6',border:'1px solid rgba(139,92,246,0.35)',
+                      opacity: featureMatchStatus === 'matching' ? 0.6 : 1}}
+                  >{featureMatchStatus === 'matching' ? 'matching…' : '✨ Auto-match'}</button>
+                )}
+                {featureMatchStatus === 'done' && <span style={{flexShrink:0,fontSize:10,fontWeight:600,color:'#34C759'}}>✓ matched</span>}
+                {featureMatchStatus === 'none' && <span style={{flexShrink:0,fontSize:10,fontWeight:600,color:'var(--text-tertiary)'}}>no line covers these features</span>}
+                {featureMatchStatus === 'failed' && <span style={{flexShrink:0,fontSize:10,fontWeight:600,color:'#FF9500'}}>couldn't match — tag manually</span>}
+              </div>
+              {sentences.map((s, idx) => (
+                <div key={idx} style={{marginBottom:6}}>
+                  <div style={{display:'flex',alignItems:'center',gap:8}}>
+                    <span title={s} style={{flex:1,minWidth:0,fontSize:11,color:'var(--text-tertiary)',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{s}</span>
+                    {feats.length > 0 && (
+                      <select
+                        value={featureBySentence[idx] || ''}
+                        onChange={e => setFeatureBySentence(m => {
+                          const n = { ...m }
+                          if (e.target.value) n[idx] = e.target.value; else delete n[idx]
+                          return n
+                        })}
+                        style={{flexShrink:0,maxWidth:170,fontSize:11,fontWeight:600,padding:'3px 6px',borderRadius:7,cursor:'pointer',fontFamily:'inherit',outline:'none',
+                          border: featureBySentence[idx] ? '1.5px solid rgba(139,92,246,0.45)' : '1px solid var(--border)',
+                          background: featureBySentence[idx] ? 'rgba(139,92,246,0.1)' : 'var(--bg)',
+                          color: featureBySentence[idx] ? '#8B5CF6' : 'var(--text-tertiary)'}}
+                      >
+                        <option value="">no feature</option>
+                        {feats.map(f => <option key={f.id} value={f.id}>☞ {f.name}</option>)}
+                      </select>
+                    )}
+                  </div>
+                  {shotMode !== 'oner' && (
+                    <BareInput
+                      value={lineNotes[idx] ?? ''}
+                      onChange={e => setLineNotes(m => {
+                        const n = { ...m }
+                        if (e.target.value.trim()) n[idx] = e.target.value; else delete n[idx]
+                        return n
+                      })}
+                      placeholder="↳ what happens on this line? e.g. she puts the mask on / steps into the light"
+                      style={{marginTop:3,fontSize:10.5,padding:'3px 7px',borderRadius:6,
+                        border: lineNotes[idx] ? '1px solid rgba(236,72,153,0.4)' : '1px dashed var(--border)',
+                        background: lineNotes[idx] ? 'rgba(236,72,153,0.06)' : 'transparent',
+                        color:'var(--text-secondary)'}}
+                    />
+                  )}
+                </div>
+              ))}
             </div>
           )
         })()}

@@ -13,6 +13,7 @@
 import { BAKED_CAMERA_KNOWLEDGE, KNOWLEDGE_SOURCES } from './cameraKnowledge'
 import { reportAiAuthFailure } from './aiHealth'
 import { getActiveProvider, aiComplete } from './aiProvider'
+import { PROTECTED_CLAUSE_PATTERNS } from './featureBeats'
 
 const KNOWLEDGE_CACHE_KEY = 'hf_camera_knowledge_v1'
 const KNOWLEDGE_TTL_MS = 7 * 24 * 3600 * 1000
@@ -117,9 +118,22 @@ export function validateTunedPrompt(original, tuned, { dialogueLines = [] } = {}
   if (original.includes('No music. No captions. No text overlays.') && !tuned.includes('No music. No captions. No text overlays.')) {
     return { ok: false, reason: 'no-music rule lost' }
   }
-  if (original.includes('LOGIC RULE:') && !tuned.includes('LOGIC RULE:')) return { ok: false, reason: 'LOGIC RULE lost' }
+  // The ENTIRE LOGIC RULE line must survive verbatim, not just its marker —
+  // it carries the same-object, occlusion, and never-invent-features rules,
+  // and the system prompt already demands it byte-identical.
+  const logicRuleLine = original.split('\n').find(l => l.startsWith('LOGIC RULE:'))
+  if (logicRuleLine && !tuned.includes(logicRuleLine)) return { ok: false, reason: 'LOGIC RULE altered' }
   const formatLine = original.split('\n')[0]
   if (formatLine.startsWith('FORMAT:') && !tuned.includes(formatLine)) return { ok: false, reason: 'FORMAT header changed' }
+  // Feature gesture beats, user direction notes, and oner anchors are the
+  // deterministic audio-sync layer — camera language around them is fair game,
+  // the clauses themselves are not. Patterns live in featureBeats.js next to
+  // the strings that produce them.
+  for (const re of PROTECTED_CLAUSE_PATTERNS) {
+    for (const clause of original.match(re) || []) {
+      if (!tuned.includes(clause)) return { ok: false, reason: 'feature gesture beat altered' }
+    }
+  }
   return { ok: true }
 }
 
@@ -132,7 +146,7 @@ export async function tuneVideoPrompt({ prompt, dialogueLines = [], context = {}
   const result = await aiComplete({
     model,
     maxTokens: 8000,
-    system: `You are a camera-language tuner for Seedance 2.0 video prompts. You receive a working prompt and return the SAME prompt with ONLY the camera movement, framing, and motion language improved per shot, using this reference:\n\n${getCameraKnowledge()}\n\nInviolable rules:\n- Change ONLY camera/movement/framing wording inside shot headers and shot action prose.\n- Every @image_N tag, all dialogue in quotes (any language), the FORMAT line, WARDROBE/PRODUCT/LOGIC RULE sections, timings, and "No music. No captions. No text overlays." stay byte-for-byte identical.\n- One movement per shot, one speed word, no alternatives, no "cinematic" on locked shots.\n- Respect the shot's existing register (handheld self-filmed stays handheld arm's-length; locked stays locked).\n- Output ONLY the full tuned prompt. No preamble, no code fences, no commentary.`,
+    system: `You are a camera-language tuner for Seedance 2.0 video prompts. You receive a working prompt and return the SAME prompt with ONLY the camera movement, framing, and motion language improved per shot, using this reference:\n\n${getCameraKnowledge()}\n\nInviolable rules:\n- Change ONLY camera/movement/framing wording inside shot headers and shot action prose.\n- Every @image_N tag, all dialogue in quotes (any language), the FORMAT line, WARDROBE/PRODUCT/LOGIC RULE sections, timings, and "No music. No captions. No text overlays." stay byte-for-byte identical.\n- One movement per shot, one speed word, no alternatives, no "cinematic" on locked shots.\n- Respect the shot's existing register (handheld self-filmed stays handheld arm's-length; locked stays locked).\n- Feature gesture clauses ("— as she says this, …", "When she reaches the line about …"), user direction notes ("— at this moment, …"), and the LOGIC RULE occlusion sentence stay byte-for-byte identical — they synchronize actions with the audio.\n- Output ONLY the full tuned prompt. No preamble, no code fences, no commentary.`,
     user: `Context: ${JSON.stringify(context)}\n\nPROMPT TO TUNE:\n${prompt}`,
     ...fableExtras(model),
   })

@@ -47,6 +47,9 @@ One mention in ENVIRONMENT can lose to the model's default for that setting. To 
 **12. Simple beats detailed. Every time.**
 One clear action per shot beats three layered ones. When in doubt, cut. Seedance renders what it can hold.
 
+**13. Never name product features the references don't show.**
+Learned from a real failure: a prompt template said "hidden vents and openings" about a mask whose vent is concealed — Seedance obligingly painted a visible air hole onto it. Naming a feature type is an invitation to render it. Describe details only through what the reference images actually show, and pair every product with an explicit never-invent rule: "Never invent features: no added holes, vents, openings, seams, logos, or markings not visible in the references. Concealed features stay concealed."
+
 ---
 
 ## THE TWO SHOT FAMILIES
