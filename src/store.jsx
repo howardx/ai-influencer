@@ -52,6 +52,18 @@ function writeIds(ids) {
   try { localStorage.setItem(IDS_KEY, JSON.stringify(ids)); return true } catch { return false }
 }
 
+// Persist only records whose object identity changed since the previous render —
+// re-serializing every influencer (multi-MB base64 blobs included) on each state
+// change is what made typing feel heavy. Identity comparison is sound because
+// updates always create fresh objects via setState. A null prevMap (first run)
+// writes everything, preserving the legacy-key migration path. Exported for tests.
+export function writeChangedInfluencers(influencers, prevMap) {
+  for (const inf of influencers) {
+    if (!prevMap || prevMap.get(inf.id) !== inf) writeInfluencer(inf)
+  }
+  return new Map(influencers.map(i => [i.id, i]))
+}
+
 // Read the legacy single-key list (may still have data even after migration attempt)
 function readLegacyList() {
   try {
@@ -100,6 +112,9 @@ function useInfluencerStore(initial) {
   // Track the IDs this tab knew about on the previous render, so we can tell an
   // influencer this tab explicitly deleted apart from one another open tab created.
   const prevIdsRef = useRef(influencers.map(i => i.id))
+  // Previous render's id → object map; null so the first persist writes everything
+  // (covers state loaded from the legacy single-key fallback).
+  const prevMapRef = useRef(null)
 
   useEffect(() => {
     const ids = influencers.map(i => i.id)
@@ -117,7 +132,7 @@ function useInfluencerStore(initial) {
     )
     writeIds([...ids, ...foreignIds])
 
-    for (const inf of influencers) writeInfluencer(inf)
+    prevMapRef.current = writeChangedInfluencers(influencers, prevMapRef.current)
 
     // Only remove keys for influencers THIS tab explicitly deleted. Never delete
     // a key we simply don't know about — it may belong to another open tab.
