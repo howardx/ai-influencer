@@ -1245,10 +1245,10 @@ function ScriptsSection({ scripts=[], influencerPrompt='', onChange, initialExpa
             <div style={{padding:'18px 20px 14px',borderBottom:'1px solid var(--border)',flexShrink:0}}>
               <div style={{display:'flex',alignItems:'center',gap:10,marginBottom:10}}>
                 <div style={{width:3,height:20,borderRadius:2,background:ss.color,flexShrink:0}}/>
-                <input
+                <BareInput
                   value={s.title}
                   onChange={e=>upd(s.id,'title',e.target.value)}
-                  style={{flex:1,fontSize:15,fontWeight:700,border:'none',background:'transparent',color:'var(--text-primary)',outline:'none',letterSpacing:'-0.3px',minWidth:0}}
+                  style={{flex:1,width:'auto',fontSize:15,fontWeight:700,color:'var(--text-primary)',letterSpacing:'-0.3px',minWidth:0}}
                 />
                 <button
                   onClick={e=>{e.stopPropagation();del(s.id)}}
@@ -1323,9 +1323,9 @@ function ScriptsSection({ scripts=[], influencerPrompt='', onChange, initialExpa
                   <div style={{fontSize:11,fontWeight:700,color:'var(--text-tertiary)',textTransform:'uppercase',letterSpacing:'0.5px'}}>Script</div>
                   <button onClick={()=>copy(s.script||'',`s-${s.id}`)} style={{padding:'3px 9px',borderRadius:6,fontSize:11,fontWeight:600,border:'1px solid var(--border)',color:copied===`s-${s.id}`?'#34C759':'var(--text-secondary)',background:'var(--bg)',transition:'color 0.15s',cursor:'pointer'}}>{copied===`s-${s.id}`?'✓ Copied':'Copy'}</button>
                 </div>
-                <textarea value={s.script||''} onChange={e=>upd(s.id,'script',e.target.value)}
+                <BareInput multiline value={s.script||''} onChange={e=>upd(s.id,'script',e.target.value)}
                   placeholder="What does the influencer say?"
-                  rows={5} style={{...fieldStyle,resize:'vertical'}}/>
+                  rows={5} style={{...fieldStyle}}/>
               </div>
 
               {/* Image References */}
@@ -1382,15 +1382,15 @@ function ScriptsSection({ scripts=[], influencerPrompt='', onChange, initialExpa
                     <button onClick={()=>copy(s.prompt||'',`p-${s.id}`)} style={{padding:'3px 9px',borderRadius:6,fontSize:11,fontWeight:600,border:'1px solid var(--border)',color:copied===`p-${s.id}`?'#34C759':'var(--text-secondary)',background:'var(--bg)',transition:'color 0.15s',cursor:'pointer'}}>{copied===`p-${s.id}`?'✓ Copied':'Copy'}</button>
                   </div>
                 </div>
-                <textarea value={s.prompt||''} onChange={e=>upd(s.id,'prompt',e.target.value)}
+                <BareInput multiline value={s.prompt||''} onChange={e=>upd(s.id,'prompt',e.target.value)}
                   placeholder="Paste the Higgsfield prompt for this video…"
-                  rows={8} style={{...fieldStyle,resize:'vertical',fontSize:12,lineHeight:1.65}}/>
+                  rows={8} style={{...fieldStyle,fontSize:12,lineHeight:1.65}}/>
               </div>
 
               {/* Posted URL */}
               <div>
                 <div style={{fontSize:11,fontWeight:700,color:'var(--text-tertiary)',textTransform:'uppercase',letterSpacing:'0.5px',marginBottom:8}}>Posted At</div>
-                <input value={s.postedUrl||''} onChange={e=>upd(s.id,'postedUrl',e.target.value)}
+                <BareInput value={s.postedUrl||''} onChange={e=>upd(s.id,'postedUrl',e.target.value)}
                   placeholder="Instagram, TikTok, YouTube URL…"
                   style={{...fieldStyle}}/>
                 {s.postedUrl&&(
@@ -1476,17 +1476,42 @@ function InfoCell({ label, icon, children, span }) {
 }
 
 // Bare input — no box, just text
-function BareInput({ value, onChange, placeholder, multiline, rows = 3 }) {
+// Buffered field: keystrokes stay in local state; the store is updated on blur
+// (and on unmount, so a tab switch mid-edit doesn't lose the draft). Writing
+// through the global context per character re-rendered the entire page and
+// re-serialized the influencer record on every keystroke.
+function BareInput({ value, onChange, placeholder, multiline, rows = 3, style }) {
+  const [draft, setDraft] = useState(value ?? '')
+  const editingRef = useRef(false)
+  const commitRef = useRef(null)
+
+  // Adopt external updates (influencer switch, programmatic changes) unless mid-edit
+  useEffect(() => { if (!editingRef.current) setDraft(value ?? '') }, [value])
+
+  const commit = () => {
+    editingRef.current = false
+    if (draft !== (value ?? '')) onChange({ target: { value: draft } })
+  }
+  commitRef.current = commit
+  useEffect(() => () => { if (editingRef.current) commitRef.current?.() }, [])
+
   const s = {
     width: '100%', border: 'none', background: 'transparent',
     padding: 0, fontFamily: 'inherit', fontSize: 13, fontWeight: 500,
-    color: value ? 'var(--text-primary)' : 'var(--text-tertiary)',
+    color: draft ? 'var(--text-primary)' : 'var(--text-tertiary)',
     outline: 'none', resize: multiline ? 'vertical' : 'none',
     lineHeight: 1.6,
+    ...style,
+  }
+  const handlers = {
+    value: draft,
+    placeholder,
+    onChange: e => { editingRef.current = true; setDraft(e.target.value) },
+    onBlur: commit,
   }
   return multiline
-    ? <textarea value={value} onChange={onChange} placeholder={placeholder} rows={rows} style={s}/>
-    : <input value={value} onChange={onChange} placeholder={placeholder} style={s}/>
+    ? <textarea {...handlers} rows={rows} style={s}/>
+    : <input {...handlers} style={s}/>
 }
 
 // ─────────────────────────────────────────────
@@ -1495,7 +1520,11 @@ function DescriptionForm({ influencer, onUpdate }) {
   const u = (k, v) => onUpdate(influencer.id, { [k]: v })
   const niches = getNiches(influencer.gender)
   const aPh = audiencePh(influencer.gender, influencer.niche)
-  const pv = influencer.introExtrovert ?? 50
+  // Slider drafts locally while dragging (label/thumb stay live) and commits to
+  // the store on release — onChange fires per pixel during a drag.
+  const [pvDraft, setPvDraft] = useState(null)
+  const pv = pvDraft ?? influencer.introExtrovert ?? 50
+  const commitPv = () => { if (pvDraft != null) { u('introExtrovert', pvDraft); setPvDraft(null) } }
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
@@ -1509,8 +1538,8 @@ function DescriptionForm({ influencer, onUpdate }) {
         <div style={{ display: 'grid', gridTemplateColumns: '72px 1fr 1fr', gap: 10 }}>
           <div>
             <div style={{ fontSize: 9.5, fontWeight: 700, color: 'var(--text-tertiary)', textTransform: 'uppercase', letterSpacing: '0.7px', marginBottom: 5 }}>Age</div>
-            <input value={influencer.age ?? ''} onChange={e => u('age', e.target.value)} placeholder="—"
-              style={{ width: '100%', border: 'none', background: 'transparent', padding: 0, fontFamily: 'inherit', fontSize: 14, fontWeight: 600, color: 'var(--text-primary)', outline: 'none' }}/>
+            <BareInput value={influencer.age ?? ''} onChange={e => u('age', e.target.value)} placeholder="—"
+              style={{ fontSize: 14, fontWeight: 600, color: 'var(--text-primary)' }}/>
           </div>
           <div>
             <div style={{ fontSize: 9.5, fontWeight: 700, color: 'var(--text-tertiary)', textTransform: 'uppercase', letterSpacing: '0.7px', marginBottom: 4 }}>Niche</div>
@@ -1543,7 +1572,8 @@ function DescriptionForm({ influencer, onUpdate }) {
           <span style={{ fontSize: 9.5, fontWeight: 700, color: 'var(--text-tertiary)', textTransform: 'uppercase', letterSpacing: '0.7px' }}>Personality</span>
           <span style={{ fontSize: 12, fontWeight: 700, color: pColor(pv) }}>{pLabel(pv)}</span>
         </div>
-        <input type="range" min={0} max={100} value={pv} onChange={e => u('introExtrovert', Number(e.target.value))}
+        <input type="range" min={0} max={100} value={pv} onChange={e => setPvDraft(Number(e.target.value))}
+          onPointerUp={commitPv} onKeyUp={commitPv} onBlur={commitPv}
           style={{ width: '100%', height: 5, borderRadius: 3, background: 'linear-gradient(to right,#FBBF24,#F97316,#EF4444)', outline: 'none', appearance: 'none', WebkitAppearance: 'none', cursor: 'pointer' }}/>
         <style>{`input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:16px;height:16px;border-radius:50%;background:#fff;border:2.5px solid ${pColor(pv)};box-shadow:0 1px 4px rgba(0,0,0,.15);cursor:pointer;}`}</style>
         <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 5 }}>
@@ -6225,9 +6255,9 @@ export default function Influencers() {
           {/* Prompt */}
           <Sec>
             <div style={{fontSize:11,fontWeight:700,color:'var(--text-secondary)',textTransform:'uppercase',letterSpacing:'0.5px',marginBottom:10}}>Prompt</div>
-            <textarea value={influencer.prompt} onChange={e=>upd(influencer.id,{prompt:e.target.value})}
+            <BareInput multiline value={influencer.prompt} onChange={e=>upd(influencer.id,{prompt:e.target.value})}
               placeholder="Paste your prompt here" rows={3}
-              style={{width:'100%',padding:'10px 14px',borderRadius:'var(--radius-sm)',border:'1.5px solid var(--border)',background:'var(--bg)',fontSize:14,color:'var(--text-primary)',resize:'vertical',lineHeight:1.6}}/>
+              style={{padding:'10px 14px',borderRadius:'var(--radius-sm)',border:'1.5px solid var(--border)',background:'var(--bg)',fontSize:14,color:'var(--text-primary)'}}/>
           </Sec>
 
           {/* Detail tabs */}
