@@ -4,6 +4,7 @@ import { useLocation, useNavigate } from 'react-router-dom'
 import { useInfluencers, useBrandDeals, generateId } from '../store'
 import Lightbox from '../components/Lightbox'
 import { compressImage, downloadImage } from '../utils/imageUtils'
+import { splitDialogueSentences, distributeSentences } from '../utils/dialogueSplit'
 import { generateSingleImage, generateThreeImages, generateVideo, initSession, pollAllJobs, getPendingGens, clearPendingGen, getPendingVideo, clearPendingVideo, resumeVideoJob, isCancelError } from '../utils/higgsfieldGenerate'
 import { buildThreeVariationPrompts } from '../utils/systemPrompt'
 import { gColor, pLabel } from '../utils/influencerUtils'
@@ -2847,10 +2848,9 @@ function annotateDialogue(rawText, { productTag = null, durationSecs, isHandheld
   if (!rawText.trim()) return ''
 
   // Split into clauses:
-  // 1. On sentence endings (.  !  ?) followed by a space
+  // 1. On sentence endings — ASCII (. ! ?) and CJK (。！？), see dialogueSplit
   // 2. Then on comma-pivot breaks: ", but " / ", however " / ", though " / ", yet "
-  const sentences = rawText.trim()
-    .split(/(?<=[.!?])\s+/)
+  const sentences = splitDialogueSentences(rawText)
     .flatMap(s => s.split(/,\s+(?=(?:but|however|though|yet)\s)/i))
     .map(s => s.trim())
     .filter(Boolean)
@@ -4109,8 +4109,10 @@ function ContentStudio({ influencer, onUpdate, onSaveToScripts, onGenerated, res
     const { actionBeats, directionNotes } = parseAdditionalNotes(additionalNotes, duration)
 
     const annotatedDialogue = annotateDialogue(fullDialogue, { productTag: prod1Tag, durationSecs: duration, isHandheld, wearMode, actionBeats, she, her, his })
-    // For multi-shot: distribute raw sentences across shots
-    const dialogueLines = fullDialogue ? fullDialogue.split(/(?<=[.!?])\s+/).filter(s=>s.trim()) : []
+    // For multi-shot: distribute raw sentences across shots (CJK-aware — an
+    // ASCII-only split saw a Chinese script as one sentence, crammed it into
+    // the 2s hook shot, and Seedance invented lines for the silent shots)
+    const dialogueLines = splitDialogueSentences(fullDialogue)
 
     // Product logic rules (belt+suspenders reference alongside PRODUCT section)
     const productRules = []
@@ -4147,6 +4149,10 @@ function ContentStudio({ influencer, onUpdate, onSaveToScripts, onGenerated, res
     const framing = camera === 'Wide' ? 'WS' : camera === 'Overhead' ? 'overhead' : camera === 'Talking Head' ? 'MS' : 'MCU'
     const lens = camera === 'Handheld' ? '24mm' : camera === 'Wide' ? '28mm' : camera === 'Overhead' ? '35mm' : camera === 'Talking Head' ? '50mm' : '28mm'
 
+    // Chunk sentences across shots weighted by shot duration — one-sentence-
+    // per-shot dropped everything past shot N on longer scripts.
+    const lineChunks = distributeSentences(dialogueLines, shotDurs)
+
     const shots = []
     let t = 0
     for (let i = 0; i < shotCount; i++) {
@@ -4163,16 +4169,19 @@ function ContentStudio({ influencer, onUpdate, onSaveToScripts, onGenerated, res
         shots.push(`ACTION:\n0:00 to 0:${String(duration).padStart(2,'0')} — ${framing}, ${lens}, ${move}. One continuous take.\n\n${startPin}${actionBody}${onerTail}`.trimEnd())
       } else if (i === 0) {
         const startPin = startFrameUrl ? `Video opens at 0:00 as @image_1 exactly. ` : ''
-        const hookBody = dialogueLines[0] ? annotateDialogue(dialogueLines[0], { productTag: prod1Tag, durationSecs: duration, isHandheld, wearMode, she, her, his }) : (startFrameUrl ? '' : `@image_1 faces camera. Eyes on lens at 0:00.`)
+        const hookLine = (lineChunks[0] || []).join(' ')
+        const hookBody = hookLine ? annotateDialogue(hookLine, { productTag: prod1Tag, durationSecs: duration, isHandheld, wearMode, she, her, his }) : (startFrameUrl ? '' : `@image_1 faces camera. Eyes on lens at 0:00.`)
         shots.push(`SHOT 1 — ${ts}, ${framing}, ${lens}, ${move}.\n${startPin}${hookBody}`.trimEnd())
       } else {
-        const line = dialogueLines[i] || ''
+        const line = (lineChunks[i] || []).join(' ')
         const gesture = prod1Tag && i === 1
           ? (wearMode ? `${she} touches ${prod1Tag} and angles toward camera to show it` : `${she} tilts ${prod1Tag} toward camera slightly`)
           : 'one hand lifts — palm-up, natural half-shrug'
-        const lineStr = line ? `"${line.trim()}" [beat — eyes stay on camera.] ` : '[holds the moment.] '
+        // A shot with no dialogue must SAY so — an implied-talking shot with no
+        // script is exactly where Seedance invents its own lines.
+        const lineStr = line ? `"${line.trim()}" [beat — eyes stay on camera.] ` : `No dialogue in this shot — ${she} does not speak, lips still. [holds the moment.] `
         const closingTail = fullDialogue && i === shotCount - 1 ? ' End cleanly with the character holding a final pose, no talking or lip movement.' : ''
-        const voiceTail = fullDialogue ? ' Voice unhurried. Tone genuine.' : ''
+        const voiceTail = line ? ' Voice unhurried. Tone genuine.' : ''
         shots.push(`SHOT ${i+1} — ${ts}, ${framing}, ${lens}, ${move}.\n@image_1 continues. ${gesture}. ${lineStr}${voiceTail}${closingTail}`.trimEnd())
       }
       t = te
@@ -4186,13 +4195,19 @@ function ContentStudio({ influencer, onUpdate, onSaveToScripts, onGenerated, res
     if (!startFrameUrl && tagMap.closeup1) subjectParts.push(`${tagMap.closeup1} for close-up facial detail — eye color, skin texture, pores.`)
     if (!startFrameUrl && tagMap.closeup2) subjectParts.push(`${tagMap.closeup2} for feature-level accuracy — lip shape, brow arch, skin tone.`)
 
-    // WARDROBE — in start frame mode the outfit is baked into @image_1
+    // WARDROBE — in start frame mode the outfit is baked into @image_1.
+    // When a wardrobe/charsheet ref drives the outfit, every identity ref
+    // (main image AND close-ups) must be excluded by name: they all show the
+    // subject in some other outfit, and 3 worn-on-body photos outvote one
+    // wardrobe card if the exclusion only names @image_1.
+    const identityRefTags = ['@image_1', tagMap.closeup1, tagMap.closeup2].filter(Boolean)
+    const ignoreClothingIn = identityRefTags.join(', ')
     const wardrobeLine = startFrameUrl
       ? `Continue outfit from @image_1 exactly — same silhouette, fabric, color, styling throughout. Zero variation.`
       : tagMap.wardrobe
-        ? `Match outfit from ${tagMap.wardrobe} exactly — silhouette, fabric, color, styling, zero variation. Outfit comes from ${tagMap.wardrobe} only, not @image_1.`
+        ? `Match outfit from ${tagMap.wardrobe} exactly — silhouette, fabric, color, styling, zero variation. Outfit comes from ${tagMap.wardrobe} only — ignore all clothing visible in ${ignoreClothingIn}; those references contribute face and identity only, never wardrobe.`
         : tagMap.charsheet
-          ? `Match ${tagMap.charsheet} exactly — same outfit silhouette, fabric, color, styling throughout. Zero variation.`
+          ? `Match ${tagMap.charsheet} exactly — same outfit silhouette, fabric, color, styling throughout. Zero variation.${tagMap.closeup1 || tagMap.closeup2 ? ` Ignore clothing visible in ${ignoreClothingIn}.` : ''}`
           : ((influencer.wardrobeSlots||[]).filter(s=>s.name).map(s=>s.name).join(', ') || 'Casual, stylish, consistent throughout.')
 
     const allPresets = [...(VOICE_PRESETS.female || []), ...(VOICE_PRESETS.male || [])]
@@ -4241,7 +4256,7 @@ STYLE: ${stylePreset}
 
 DELIVERY: ${deliveryLine}
 ${directionNotes ? `\nDIRECTION: ${directionNotes}` : ''}
-LOGIC RULE: @image_1 face is fixed — same bone structure, eye color, skin tone, jawline, zero drift. Only one @image_1 in frame at any time.${shotMode==='oner' ? ' ZERO CUTS — single uninterrupted take 0:00 to ' + duration + 's. No jump cuts, no zoom, no camera switch, no temporal skip. @image_1 moves continuously — never freezes.' : ' Wardrobe identical across all shots.'}${tagMap.wardrobe ? ` Outfit matches ${tagMap.wardrobe} throughout — do not take outfit from @image_1.` : ''}${!isHandheld ? ' No phone or smartphone visible in frame at any time — no device in hand, on any surface, or in the background.' : ''} No music. No captions. No text overlays.${productRules.length ? ' ' + productRules.join(' ') : ''}
+LOGIC RULE: @image_1 face is fixed — same bone structure, eye color, skin tone, jawline, zero drift. Only one @image_1 in frame at any time.${shotMode==='oner' ? ' ZERO CUTS — single uninterrupted take 0:00 to ' + duration + 's. No jump cuts, no zoom, no camera switch, no temporal skip. @image_1 moves continuously — never freezes.' : ' Wardrobe identical across all shots.'}${tagMap.wardrobe ? ` Outfit matches ${tagMap.wardrobe} throughout — do not take outfit from ${ignoreClothingIn}.` : ''}${!isHandheld ? ' No phone or smartphone visible in frame at any time — no device in hand, on any surface, or in the background.' : ''} No music. No captions. No text overlays.${productRules.length ? ' ' + productRules.join(' ') : ''}
 
 ---
 
