@@ -76,6 +76,10 @@ Agent skills for Higgsfield workflows live in `.agents/skills/`
   `create_or_update_file`) that write to the remote directly. Use the
   MCP for PRs, issues, reviews, and verification; use local git to
   commit and push.
+- **Never commit without asking the user first.** If you think a commit
+  should happen, ask — the user will review the changes and approve the
+  commit. This applies to checkpoint/incremental commits during multi-step
+  work too, not just final ones.
 
 ## Dev workflow
 
