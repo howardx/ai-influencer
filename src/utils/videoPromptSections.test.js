@@ -28,6 +28,26 @@ describe('buildProductSection', () => {
     expect(out).not.toContain('@image_6 — product reference')
   })
 
+  it("blends the user's description of what each detail image depicts", () => {
+    const out = buildProductSection(
+      { product1: '@image_5', productDetail1: '@image_6' },
+      { detailNotes: { productDetail1: 'the hidden air vent at the nose bridge' } },
+    )
+    expect(out).toContain('@image_6 — close-up detail of @image_5, the SAME product photographed closer: it depicts the hidden air vent at the nose bridge.')
+  })
+
+  it('scopes an attached product reference video to behavior, with the image as appearance authority', () => {
+    const out = buildProductSection({ product1: '@image_5' }, { hasProductVideo: true })
+    expect(out).toContain('reference video of the product is attached')
+    // behavior only — never a second authority on appearance (the video may show
+    // a different colorway or lighting-shifted colors)
+    expect(out).toContain('ONLY for how the product behaves')
+    expect(out).toContain('@image_5 remains the sole authority')
+    expect(out).toContain('differs in color or lighting, follow @image_5')
+    // and absent otherwise
+    expect(buildProductSection({ product1: '@image_5' })).not.toContain('reference video')
+  })
+
   it('pluralizes contribute for multiple independent products', () => {
     const out = buildProductSection({ product1: '@image_5', product2: '@image_6' })
     expect(out).toContain('@image_5 and @image_6 contribute ONLY the product')

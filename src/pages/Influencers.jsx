@@ -2094,7 +2094,7 @@ function HomeSection({ slots=[], onChange }) {
 // Brand deal card — WorldDropCard style with brand + category fields
 const GEN_DURATION_MS = 150000 // ~2m30s estimated total
 
-function BrandDealCard({ deal, editingBrand, editBrand, onEditBrand, onStartEdit, onCommitEdit, onCancelEdit, onImageChange, onDelete, onCategoryChange, onLightbox, generating, progress, claudeStatus, onGenerate }) {
+function BrandDealCard({ deal, editingBrand, editBrand, onEditBrand, onStartEdit, onCommitEdit, onCancelEdit, onImageChange, onNoteChange, onDelete, onCategoryChange, onLightbox, generating, progress, claudeStatus, onGenerate }) {
   const fileRef = useRef()
   const [hovered,setHovered]=useState(false)
   const [dragOver,setDragOver]=useState(false)
@@ -2265,6 +2265,18 @@ function BrandDealCard({ deal, editingBrand, editBrand, onEditBrand, onStartEdit
               background:'rgba(139,92,246,0.12)',color:'#8B5CF6',border:'1px solid rgba(139,92,246,0.35)',
             }}>★ Set main</button>
           )}
+        </div>
+      )}
+      {/* Detail description for the focused extra image — blended into the video
+          prompt so the model knows WHAT the close-up depicts */}
+      {focusIdx != null && focusIdx > 0 && gallery[focusIdx] && (
+        <div style={{padding:'6px 8px 0'}}>
+          <BareInput
+            value={deal.imageNotes?.[gallery[focusIdx]] ?? ''}
+            onChange={e=>onNoteChange?.(gallery[focusIdx], e.target.value)}
+            placeholder="What does this image show? e.g. hidden air vent at the nose bridge"
+            style={{fontSize:11,padding:'5px 8px',borderRadius:6,border:'1px solid var(--border)',background:'var(--bg-tertiary)'}}
+          />
         </div>
       )}
 
@@ -2548,8 +2560,12 @@ function BrandDealSection({ deals=[], onChange }) {
               onCommitEdit={commitRename}
               onCancelEdit={()=>{setEditId(null);setEditBrand('')}}
               onImageChange={(img,imgs,opts)=>updateDeal(deal.id, imgs
-                ? {images:imgs, image:imgs[0] ?? null, ...(opts?.keepSheet && imgs[0]===deal.image ? {} : {characterSheet:null})}
-                : {image:img, images:img?[img]:[], characterSheet:null})}
+                ? {images:imgs, image:imgs[0] ?? null,
+                   // prune notes for removed images — keys are multi-MB data URLs
+                   imageNotes:Object.fromEntries(Object.entries(deal.imageNotes||{}).filter(([k])=>imgs.includes(k))),
+                   ...(opts?.keepSheet && imgs[0]===deal.image ? {} : {characterSheet:null})}
+                : {image:img, images:img?[img]:[], imageNotes:{}, characterSheet:null})}
+              onNoteChange={(url,note)=>updateDeal(deal.id,{imageNotes:{...(deal.imageNotes||{}),[url]:note}})}
               onDelete={()=>deleteDeal(deal.id)}
               onCategoryChange={cat=>updateDeal(deal.id,{category:cat})}
               onLightbox={(imgs,start)=>setLightbox({images:imgs,start:start||0})}
@@ -3766,8 +3782,26 @@ function ContentStudio({ influencer, onUpdate, onSaveToScripts, onGenerated, res
   ].filter(img=>img.url)
 
   const [productRef1, setProductRef1] = useState(() => { try { return localStorage.getItem(`hf_product_ref_1_${influencer.id}`) || null } catch { return null } })
-  // Close-up detail shots of product 1 (e.g. a hidden vent) — same product, ≤2
-  const [productDetailRefs, setProductDetailRefs] = useState(() => { try { return JSON.parse(localStorage.getItem(`hf_product_details_${influencer.id}`) || '[]') } catch { return [] } })
+  // Close-up detail shots of product 1 (e.g. a hidden vent) — same product, ≤2.
+  // Entries are {url, note}; older persisted entries were plain URL strings.
+  const [productDetailRefs, setProductDetailRefs] = useState(() => {
+    try {
+      const parsed = JSON.parse(localStorage.getItem(`hf_product_details_${influencer.id}`) || '[]')
+      return (Array.isArray(parsed) ? parsed : []).map(d => (typeof d === 'string' ? { url: d, note: '' } : d))
+    } catch { return [] }
+  })
+  // Product demonstration video (Seedance role 'video'). Held in memory only —
+  // video data URLs run tens of MB and would blow the localStorage quota.
+  const [productVideoRef, setProductVideoRef] = useState(null) // { dataUrl, name, sizeMB }
+  const productVideoFileRef = useRef(null)
+
+  function handleProductVideoFile(f) {
+    if (!f || !f.type.startsWith('video/')) return
+    if (f.size > 30 * 1024 * 1024) { alert('Product video must be under 30MB.'); return }
+    const r = new FileReader()
+    r.onload = ev => setProductVideoRef({ dataUrl: ev.target.result, name: f.name, sizeMB: (f.size / 1048576).toFixed(1) })
+    r.readAsDataURL(f)
+  }
   const [productRef2, setProductRef2] = useState(() => { try { return localStorage.getItem(`hf_product_ref_2_${influencer.id}`) || null } catch { return null } })
   const [productRef3, setProductRef3] = useState(() => { try { return localStorage.getItem(`hf_product_ref_3_${influencer.id}`) || null } catch { return null } })
   const [productWorn, setProductWorn] = useState(() => { try { return JSON.parse(localStorage.getItem(`cs_settings_${influencer.id}`) || '{}').productWorn ?? false } catch { return false } })
@@ -4041,9 +4075,9 @@ function ContentStudio({ influencer, onUpdate, onSaveToScripts, onGenerated, res
   // the deal's main image becomes Product 1 so the detail always has an anchor.
   // slice(-2): the newest click evicts the oldest — a capped slice(0,2) made the
   // third click a silent no-op that read as broken.
-  function addProductDetail(url, dealMainUrl) {
+  function addProductDetail(url, dealMainUrl, note = '') {
     if (!productRef1 && dealMainUrl) setProductRef1(dealMainUrl)
-    setProductDetailRefs(prev => (prev.includes(url) ? prev : [...prev, url].slice(-2)))
+    setProductDetailRefs(prev => (prev.some(d => d.url === url) ? prev : [...prev, { url, note }].slice(-2)))
   }
 
   // Persist video settings per-influencer whenever they change (skip during restore to avoid writing stale state)
@@ -4082,8 +4116,9 @@ function ContentStudio({ influencer, onUpdate, onSaveToScripts, onGenerated, res
     // Tag map derived from the SAME ordered list the upload uses (orderedRefs) —
     // @image_N binds by position, so deriving both from one list makes a
     // tag/upload mismatch structurally impossible.
+    const refsList = orderedRefs()
     const tagMap = {}
-    orderedRefs().forEach((img, i) => { tagMap[img.role] = `@image_${i + 1}` })
+    refsList.forEach((img, i) => { tagMap[img.role] = `@image_${i + 1}` })
 
     // Shot count — oner = always 1, multi = auto from duration
     const shotCount = shotMode === 'oner' ? 1 : duration <= 5 ? 1 : duration <= 8 ? 2 : duration <= 12 ? 3 : 4
@@ -4155,8 +4190,11 @@ function ContentStudio({ influencer, onUpdate, onSaveToScripts, onGenerated, res
     // Product logic rules + PRODUCT section — shared pure builders
     // (utils/videoPromptSections.js) handle independent products AND close-up
     // detail refs of product 1, which must be declared as the SAME object.
+    const detailNotes = Object.fromEntries(
+      refsList.filter(r => r.role.startsWith('productDetail')).map(r => [r.role, r.note || ''])
+    )
     const productRules = buildProductRules(tagMap, { wearMode, She })
-    const productSection = buildProductSection(tagMap, { wearMode, she })
+    const productSection = buildProductSection(tagMap, { wearMode, she, detailNotes, hasProductVideo: !!productVideoRef })
 
     // Build shots
     const shotDurs = shotCount === 1 ? [duration]
@@ -4339,8 +4377,17 @@ ${shotsWithBeats.join('\n\n')}`
       productRef2 && { role: 'product2', url: productRef2 },
       productRef3 && { role: 'product3', url: productRef3 },
     ].filter(Boolean)
+    // Notes resolve at prompt-build time from the deal (latest edit wins), with
+    // the click-time snapshot as fallback — a description written AFTER the
+    // thumbnail was clicked must still reach the prompt.
+    const liveNoteFor = url => {
+      for (const deal of influencer.brandDeals || []) {
+        if (deal.imageNotes?.[url]) return deal.imageNotes[url]
+      }
+      return null
+    }
     const detailRefs = (productRef1 ? productDetailRefs.slice(0, 2) : [])
-      .map((url, i) => ({ role: `productDetail${i + 1}`, url }))
+      .map((d, i) => ({ role: `productDetail${i + 1}`, url: d.url, note: liveNoteFor(d.url) ?? d.note ?? '' }))
 
     if (startFrameUrl) {
       // Start frame mode: @image_1 = start frame (identity + outfit + scene baked in)
@@ -4456,6 +4503,7 @@ ${shotsWithBeats.join('\n\n')}`
         duration,
         count: outputs,
         referenceImages: buildRefs(), // orderedRefs handles start-frame mode internally
+        videoRef: productVideoRef?.dataUrl ?? null,
         startFrameUrl: null,  // start frame is passed as @image_1 via referenceImages; start_image role would duplicate it
         audioRef: audioDataUrl || null,
         model: videoModel,
@@ -4737,17 +4785,40 @@ ${shotsWithBeats.join('\n\n')}`
           <div style={{marginTop:12}}>
             <div style={{fontSize:11,fontWeight:600,color:'var(--text-tertiary)',marginBottom:6}}>Detail close-ups — same product as Product 1</div>
             <div style={{display:'flex',gap:8}}>
-              {productDetailRefs.map(url=>(
-                <div key={url} style={{position:'relative'}}>
-                  <img src={url} style={{width:44,height:56,objectFit:'cover',borderRadius:8,border:'1.5px solid var(--border)',display:'block'}} alt="product detail"/>
-                  <button onClick={()=>setProductDetailRefs(prev=>prev.filter(u=>u!==url))} aria-label="Remove detail image" style={{
+              {productDetailRefs.map(d=>(
+                <div key={d.url} style={{position:'relative'}} title={d.note ? `Depicts: ${d.note}` : 'No description — add one on the deal card for a better prompt'}>
+                  <img src={d.url} style={{width:44,height:56,objectFit:'cover',borderRadius:8,border:'1.5px solid var(--border)',display:'block'}} alt="product detail"/>
+                  <button onClick={()=>setProductDetailRefs(prev=>prev.filter(x=>x.url!==d.url))} aria-label="Remove detail image" style={{
                     position:'absolute',top:-6,right:-6,width:18,height:18,borderRadius:'50%',
                     background:'var(--surface)',border:'1px solid var(--border)',color:'var(--text-secondary)',
                     fontSize:11,lineHeight:1,cursor:'pointer',display:'flex',alignItems:'center',justifyContent:'center',padding:0,
                   }}>×</button>
+                  {d.note && <div style={{fontSize:8,color:'var(--text-tertiary)',width:44,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap',textAlign:'center',marginTop:2}}>{d.note}</div>}
                 </div>
               ))}
             </div>
+          </div>
+        )}
+        {productRef1 && (
+          <div style={{marginTop:12}}>
+            <div style={{fontSize:11,fontWeight:600,color:'var(--text-tertiary)',marginBottom:6}}>Product video — optional demonstration reference</div>
+            {productVideoRef ? (
+              <div style={{display:'flex',alignItems:'center',gap:8,fontSize:12,color:'var(--text-secondary)'}}>
+                <span style={{padding:'5px 10px',borderRadius:8,background:'var(--bg-tertiary)',border:'1px solid var(--border)'}}>🎬 {productVideoRef.name} · {productVideoRef.sizeMB}MB</span>
+                <button onClick={()=>setProductVideoRef(null)} aria-label="Remove product video" style={{border:'none',background:'transparent',color:'var(--text-secondary)',fontSize:14,cursor:'pointer'}}>×</button>
+              </div>
+            ) : (
+              <div
+                onClick={()=>productVideoFileRef.current?.click()}
+                onDragOver={e=>e.preventDefault()}
+                onDrop={e=>{e.preventDefault();handleProductVideoFile(e.dataTransfer.files[0])}}
+                style={{padding:'10px 12px',borderRadius:10,border:'1.5px dashed var(--border)',fontSize:11,color:'var(--text-tertiary)',cursor:'pointer'}}
+              >
+                Drop a short clip of the product (mp4/mov/webm, ≤30MB) — used for how the product behaves; colors always follow Product 1
+              </div>
+            )}
+            <input ref={productVideoFileRef} type="file" accept="video/*" style={{display:'none'}}
+              onChange={e=>{handleProductVideoFile(e.target.files[0]);e.target.value=''}}/>
           </div>
         )}
         {(influencer.brandDeals||[]).filter(d=>d.image||d.characterSheet).length>0&&(
@@ -4798,10 +4869,12 @@ ${shotsWithBeats.join('\n\n')}`
                     {(deal.images||[]).length > 1 && (
                       <div style={{display:'flex',gap:4,justifyContent:'center'}} title="Detail shots — click to blend into the video as close-ups of this product">
                         {(deal.images||[]).slice(1, 4).map(img=>{
-                          const added = productDetailRefs.includes(img)
+                          const added = productDetailRefs.some(d=>d.url===img)
+                          const note = deal.imageNotes?.[img] || ''
                           return (
                             <img key={img} src={img} alt={`${deal.brand} detail`}
-                              onClick={()=>added ? setProductDetailRefs(prev=>prev.filter(u=>u!==img)) : addProductDetail(img, activeUrl)}
+                              title={note ? `Depicts: ${note}` : undefined}
+                              onClick={()=>added ? setProductDetailRefs(prev=>prev.filter(d=>d.url!==img)) : addProductDetail(img, activeUrl, note)}
                               style={{width:20,height:26,objectFit:'cover',borderRadius:4,cursor:'pointer',display:'block',
                                 border: added ? '1.5px solid #8B5CF6' : '1px solid var(--border)',
                                 opacity: added ? 1 : 0.75}}/>

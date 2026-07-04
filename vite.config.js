@@ -1,4 +1,7 @@
 import { Readable, pipeline } from 'node:stream'
+import net from 'node:net'
+import https from 'node:https'
+import { SocksProxyAgent } from 'socks-proxy-agent'
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 // Reuse the production guard so the dev mirror can't drift from it (an unguarded
@@ -81,6 +84,51 @@ const imgProxyPlugin = {
   },
 }
 
+// ── Dev-only US egress for the Claude upstream ────────────────────────────
+// Anthropic region-blocks AUTHENTICATED API calls from some egress IPs with
+// 403 "Request not allowed" — keyless probes still get 401 (auth is checked
+// first), which makes this easy to misdiagnose as a bad key. The developer's
+// US routing (`us-on` in ~/.zshrc) is an xray SOCKS proxy on 127.0.0.1:10808
+// set as the macOS SYSTEM proxy — browsers honor that, but Node ignores
+// system proxies (and HTTP_PROXY) entirely, so the dev server's upstream
+// fetch used to bypass the tunnel and 403 while the same key returned 200
+// from the browser. Probe the SOCKS port (cached 60s) and route the Claude
+// upstream through it when up; fall back to direct when `us-off`.
+// Production is unaffected: this file never ships — api/claude.js runs on
+// Vercel with US egress (region pinned in vercel.json).
+const SOCKS_HOST = '127.0.0.1'
+const SOCKS_PORT = 10808
+let _socksCheck = { at: 0, up: false }
+function socksProxyUp() {
+  return new Promise(resolve => {
+    if (Date.now() - _socksCheck.at < 60_000) return resolve(_socksCheck.up)
+    const sock = net.connect({ host: SOCKS_HOST, port: SOCKS_PORT, timeout: 250 })
+    const done = up => { _socksCheck = { at: Date.now(), up }; sock.destroy(); resolve(up) }
+    sock.once('connect', () => done(true))
+    sock.once('error', () => done(false))
+    sock.once('timeout', () => done(false))
+  })
+}
+let _socksAgent = null
+function socksAgent() {
+  if (!_socksAgent) _socksAgent = new SocksProxyAgent(`socks5h://${SOCKS_HOST}:${SOCKS_PORT}`)
+  return _socksAgent
+}
+
+// node fetch can't take a SOCKS agent — plain https.request can
+function claudeUpstream({ headers, body, agent }) {
+  return new Promise((resolve, reject) => {
+    const req = https.request('https://api.anthropic.com/v1/messages', { method: 'POST', headers, agent }, resp => {
+      let data = ''
+      resp.on('data', c => { data += c })
+      resp.on('end', () => resolve({ status: resp.statusCode, text: data }))
+    })
+    req.on('error', reject)
+    req.setTimeout(60_000, () => req.destroy(new Error('Claude upstream timeout')))
+    req.end(body)
+  })
+}
+
 // Local dev Claude proxy — mirrors api/claude.js for Vercel production
 const claudePlugin = {
   name: 'claude-proxy',
@@ -102,12 +150,29 @@ const claudePlugin = {
           'x-api-key': apiKey,
           'anthropic-version': req.headers['anthropic-version'] || '2023-06-01',
           'content-type': 'application/json',
+          'content-length': Buffer.byteLength(body),
         }
         if (req.headers['anthropic-beta']) upstreamHeaders['anthropic-beta'] = req.headers['anthropic-beta']
-        const upstream = await fetch('https://api.anthropic.com/v1/messages', { method: 'POST', headers: upstreamHeaders, body })
-        const data = await upstream.json()
-        res.writeHead(upstream.status, { 'Content-Type': 'application/json' })
-        res.end(JSON.stringify(data))
+        const viaSocks = await socksProxyUp()
+        const { status, text } = await claudeUpstream({
+          headers: upstreamHeaders,
+          body,
+          agent: viaSocks ? socksAgent() : undefined,
+        })
+        let payload = text
+        if (status === 403 && !viaSocks) {
+          // Direct egress got region-blocked and the tunnel is down — say so
+          // instead of letting it read like a bad API key.
+          try {
+            const j = JSON.parse(text)
+            if (j?.error) {
+              j.error.message = `${j.error.message} — dev-server egress is not US and the local SOCKS tunnel (127.0.0.1:${SOCKS_PORT}) is down. Run 'us-on' and retry.`
+              payload = JSON.stringify(j)
+            }
+          } catch {}
+        }
+        res.writeHead(status, { 'Content-Type': 'application/json' })
+        res.end(payload)
       } catch (e) {
         res.writeHead(500, { 'Content-Type': 'application/json' })
         res.end(JSON.stringify({ error: { message: e.message } }))

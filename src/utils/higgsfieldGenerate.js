@@ -547,7 +547,16 @@ const uploadAudioFile = dataUrl => uploadMedia(dataUrl, {
   prefix: 'audio',
 })
 
-export async function generateVideo({ prompt, aspectRatio = '9:16', duration = 8, count = 1, referenceImages = [], audioRef = null, startFrameUrl = null, model = DEFAULT_VIDEO_MODEL, resolution = '1080p', onProgress, onPartialResults, isCancelled, pendingKey = null }) {
+// Seedance 2.0 accepts video reference inputs (medias role 'video') alongside
+// image/audio — used for product demonstration references.
+const uploadVideoFile = dataUrl => uploadMedia(dataUrl, {
+  type: 'video',
+  defaultContentType: 'video/mp4',
+  getExt: ct => ct.includes('webm') ? 'webm' : (ct.includes('quicktime') || ct.includes('mov')) ? 'mov' : 'mp4',
+  prefix: 'refvid',
+})
+
+export async function generateVideo({ prompt, aspectRatio = '9:16', duration = 8, count = 1, referenceImages = [], audioRef = null, videoRef = null, startFrameUrl = null, model = DEFAULT_VIDEO_MODEL, resolution = '1080p', onProgress, onPartialResults, isCancelled, pendingKey = null }) {
   await initSession()
   onProgress?.(5)
 
@@ -575,6 +584,19 @@ export async function generateVideo({ prompt, aspectRatio = '9:16', duration = 8
     })
   )).filter(Boolean)
   medias.push(...imageMedias)
+
+  // Video reference AFTER all image refs so @image_N positions stay stable
+  // (non-image roles don't carry tags; same placement rule as audio below).
+  // Fail loud, not silent: the prompt was built claiming a reference video is
+  // attached, and nothing has been submitted or spent yet at this point.
+  if (videoRef) {
+    try {
+      const videoId = await uploadVideoFile(videoRef)
+      medias.push({ value: videoId, role: 'video' })
+    } catch (e) {
+      throw new Error(`Product video upload failed: ${e.message} — remove the video or try again`)
+    }
+  }
 
   if (audioRef) {
     try {
