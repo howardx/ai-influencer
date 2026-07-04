@@ -6,6 +6,7 @@ import Lightbox from '../components/Lightbox'
 import { compressImage, downloadImage } from '../utils/imageUtils'
 import { splitDialogueSentences, distributeSentences } from '../utils/dialogueSplit'
 import { buildProductSection, buildProductRules } from '../utils/videoPromptSections'
+import { tuneVideoPrompt, getTunerModel, setTunerModel, TUNER_MODELS } from '../utils/videoPromptTuner'
 import { generateSingleImage, generateThreeImages, generateVideo, initSession, pollAllJobs, getPendingGens, clearPendingGen, getPendingVideo, clearPendingVideo, resumeVideoJob, isCancelError } from '../utils/higgsfieldGenerate'
 import { buildThreeVariationPrompts } from '../utils/systemPrompt'
 import { gColor, pLabel } from '../utils/influencerUtils'
@@ -3793,6 +3794,10 @@ function ContentStudio({ influencer, onUpdate, onSaveToScripts, onGenerated, res
   // Product demonstration video (Seedance role 'video'). Held in memory only —
   // video data URLs run tens of MB and would blow the localStorage quota.
   const [productVideoRef, setProductVideoRef] = useState(null) // { dataUrl, name, sizeMB }
+  // Claude camera-language tuning — optional pass over the deterministic prompt
+  const [claudeTune, setClaudeTune] = useState(() => { try { return localStorage.getItem('hf_claude_tune') === '1' } catch { return false } })
+  const [tuneStatus, setTuneStatus] = useState(null) // null | 'tuning' | 'tuned' | 'fallback'
+  const [tunerModel, setTunerModelState] = useState(() => getTunerModel())
   const productVideoFileRef = useRef(null)
 
   function handleProductVideoFile(f) {
@@ -4492,13 +4497,34 @@ ${shotsWithBeats.join('\n\n')}`
     setGenProgress(0)
     setElapsed(0)
     try { saveToHistory() } catch { /* never block generation over history */ }
-    setLastGeneratedPrompt(buildPrompt())
+    // Optional Claude pass: rewrites per-shot camera language with a real
+    // movement vocabulary. The validator inside tuneVideoPrompt guarantees the
+    // deterministic prompt ships unchanged if the tune touches anything
+    // load-bearing (tags, dialogue, LOGIC RULE, no-music, FORMAT).
+    let finalPrompt = buildPrompt()
+    const claudeKey = (() => { try { return localStorage.getItem('claude_api_key') } catch { return null } })()
+    if (claudeTune && claudeKey) {
+      setTuneStatus('tuning')
+      const tuned = await tuneVideoPrompt({
+        prompt: finalPrompt,
+        dialogueLines: splitDialogueSentences(dialogue.trim()),
+        apiKey: claudeKey,
+        context: { camera, vibe, duration, shotMode, hasProduct: !!productRef1, productWorn },
+      })
+      finalPrompt = tuned.prompt
+      setTuneStatus(tuned.tuned ? 'tuned' : 'fallback')
+      if (!tuned.tuned) console.warn('[Tuner] using deterministic prompt:', tuned.reason)
+    } else {
+      setTuneStatus(null)
+    }
+    if (cancelRef.current || genEpochRef.current !== myEpoch) return
+    setLastGeneratedPrompt(finalPrompt)
     const start = Date.now()
     try { localStorage.setItem(`hf_gen_start_${influencer.id}`, String(start)) } catch {}
     elapsedRef.current = setInterval(() => setElapsed(Math.floor((Date.now() - start) / 1000)), 1000)
     try {
       const result = await generateVideo({
-        prompt: buildPrompt(),
+        prompt: finalPrompt,
         aspectRatio: aspect,
         duration,
         count: outputs,
@@ -5584,6 +5610,37 @@ ${shotsWithBeats.join('\n\n')}`
             }
           </div>
         )}
+
+        {/* Claude camera tuning — optional pass over the deterministic prompt */}
+        <div style={{padding:'0 10px', display:'flex', alignItems:'center', gap:8}}>
+          <button
+            onClick={()=>{const v=!claudeTune; setClaudeTune(v); try{localStorage.setItem('hf_claude_tune', v?'1':'0')}catch{}}}
+            title={localStorage.getItem('claude_api_key') ? 'Claude rewrites each shot’s camera movement language (dolly, arc, push-in…) before generating. Dialogue, tags, and rules are never touched — falls back to the standard prompt on any doubt.' : 'Add a Claude API key in Settings to enable'}
+            style={{
+              padding:'6px 12px', borderRadius:9, fontSize:11, fontWeight:600, cursor:'pointer', fontFamily:'inherit',
+              background: claudeTune ? 'linear-gradient(135deg,rgba(236,72,153,0.15),rgba(139,92,246,0.15))' : 'var(--bg-tertiary)',
+              color: claudeTune ? '#8B5CF6' : 'var(--text-secondary)',
+              border: claudeTune ? '1.5px solid rgba(139,92,246,0.4)' : '1.5px solid transparent',
+              transition:'all 0.15s',
+            }}
+          >✨ Claude camera tuning {claudeTune ? 'ON' : 'OFF'}</button>
+          {claudeTune && (
+            <select
+              value={tunerModel}
+              onChange={e => { setTunerModel(e.target.value); setTunerModelState(getTunerModel()) }}
+              title={TUNER_MODELS.find(m => m.id === tunerModel)?.pricing || ''}
+              style={{
+                padding:'5px 8px', borderRadius:8, fontSize:11, fontWeight:600, cursor:'pointer', fontFamily:'inherit',
+                background:'var(--bg-tertiary)', color:'var(--text-secondary)', border:'1.5px solid var(--border)', outline:'none',
+              }}
+            >
+              {TUNER_MODELS.map(m => <option key={m.id} value={m.id}>{m.label}</option>)}
+            </select>
+          )}
+          {tuneStatus === 'tuning' && <span style={{fontSize:11,color:'#8B5CF6'}}>tuning camera language…</span>}
+          {tuneStatus === 'tuned' && <span style={{fontSize:11,color:'#34C759'}}>✓ camera language tuned</span>}
+          {tuneStatus === 'fallback' && <span style={{fontSize:11,color:'var(--text-tertiary)'}}>tune skipped — standard prompt used</span>}
+        </div>
 
         {/* Action row — [Random/Cancel] [Generate Video] [Save] [Inspect] */}
         <div style={{padding:'10px', display:'flex', gap:8, alignItems:'center'}}>
