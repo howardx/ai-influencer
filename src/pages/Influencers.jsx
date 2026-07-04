@@ -5,6 +5,7 @@ import { useInfluencers, useBrandDeals, generateId } from '../store'
 import Lightbox from '../components/Lightbox'
 import { compressImage, downloadImage } from '../utils/imageUtils'
 import { splitDialogueSentences, distributeSentences } from '../utils/dialogueSplit'
+import { buildProductSection, buildProductRules } from '../utils/videoPromptSections'
 import { generateSingleImage, generateThreeImages, generateVideo, initSession, pollAllJobs, getPendingGens, clearPendingGen, getPendingVideo, clearPendingVideo, resumeVideoJob, isCancelError } from '../utils/higgsfieldGenerate'
 import { buildThreeVariationPrompts } from '../utils/systemPrompt'
 import { gColor, pLabel } from '../utils/influencerUtils'
@@ -2136,7 +2137,9 @@ function BrandDealCard({ deal, editingBrand, editBrand, onEditBrand, onStartEdit
       if (existing.length === 0) {
         onImageChange(url) // sets deal.image for backward compat
       } else if (existing.length < 5) {
-        onImageChange(null, [...existing, url]) // append
+        // Appending a detail angle doesn't change the main image, so a
+        // generated character sheet stays valid — keep it.
+        onImageChange(null, [...existing, url], { keepSheet: true })
       }
     }).catch(console.error)
     r.readAsDataURL(f)
@@ -2144,8 +2147,27 @@ function BrandDealCard({ deal, editingBrand, editBrand, onEditBrand, onStartEdit
 
   const hasSheet = !!deal.characterSheet
   const hasBoth = hasSheet && !!deal.image
-  const displayImage = hasBoth ? (viewSheet ? deal.characterSheet : deal.image) : (deal.image || deal.characterSheet)
+  const gallery = deal.images?.length ? deal.images : (deal.image ? [deal.image] : [])
+  // focusIdx: which gallery image the big box shows; null = default (main/sheet)
+  const [focusIdx, setFocusIdx] = useState(null)
+  useEffect(() => { setFocusIdx(null) }, [gallery.length])
+  const focusedGalleryImage = focusIdx != null ? gallery[focusIdx] : null
+  const displayImage = focusedGalleryImage
+    || (hasBoth ? (viewSheet ? deal.characterSheet : deal.image) : (deal.image || deal.characterSheet))
   useEffect(()=>{ if(deal.characterSheet && !deal.image) setViewSheet(true) },[deal.characterSheet, deal.image])
+
+  function removeGalleryImage(idx) {
+    const next = gallery.filter((_, i) => i !== idx)
+    // Removing a non-main angle keeps the generated sheet; removing the main
+    // promotes the next image and the sheet resets (it was built from the old main).
+    onImageChange(null, next, { keepSheet: true })
+  }
+
+  function makeMain(idx) {
+    if (idx === 0) return
+    onImageChange(null, [gallery[idx], ...gallery.filter((_, i) => i !== idx)])
+    setFocusIdx(null)
+  }
 
   return (
     <div
@@ -2156,7 +2178,7 @@ function BrandDealCard({ deal, editingBrand, editBrand, onEditBrand, onStartEdit
       {/* Image slot */}
       <div
         style={{aspectRatio:'4/3',background:dragOver?'rgba(139,92,246,0.07)':'var(--bg-tertiary)',overflow:'hidden',cursor:'pointer',position:'relative',transition:'background 0.15s'}}
-        onClick={()=>{ if(generating) return; if(displayImage){const imgs=hasBoth?[deal.image,deal.characterSheet]:[displayImage];onLightbox?.(imgs,hasBoth&&viewSheet?1:0)}else{fileRef.current.click()} }}
+        onClick={()=>{ if(generating) return; if(displayImage){ if(gallery.length>1){onLightbox?.(hasSheet?[...gallery,deal.characterSheet]:gallery, focusIdx ?? 0)} else {const imgs=hasBoth?[deal.image,deal.characterSheet]:[displayImage];onLightbox?.(imgs,hasBoth&&viewSheet?1:0)} }else{fileRef.current.click()} }}
         onDragOver={e=>{e.preventDefault();setDragOver(true)}}
         onDragLeave={()=>setDragOver(false)}
         onDrop={e=>{e.preventDefault();setDragOver(false);handleFile(e.dataTransfer.files[0])}}
@@ -2216,12 +2238,33 @@ function BrandDealCard({ deal, editingBrand, editBrand, onEditBrand, onStartEdit
           onChange={e=>{Array.from(e.target.files).forEach(f=>handleFile(f));e.target.value=''}}/>
       </div>
 
-      {/* Extra images strip */}
-      {(deal.images?.length > 1) && (
-        <div style={{display:'flex',gap:4,padding:'6px 8px 0',overflowX:'auto'}}>
-          {deal.images.map((img,i) => (
-            <img key={i} src={img} alt="" style={{width:36,height:36,borderRadius:6,objectFit:'cover',flexShrink:0,opacity:i===0?0.5:1}} title={i===0?'Main (shown above)':'Extra angle'}/>
-          ))}
+      {/* Gallery strip — click to focus in the box above, × to remove, star to make main */}
+      {(gallery.length > 1) && (
+        <div style={{display:'flex',alignItems:'center',gap:4,padding:'6px 8px 0',overflowX:'auto'}}>
+          {gallery.map((img,i) => {
+            const focused = focusIdx != null ? focusIdx === i : i === 0
+            return (
+              <div key={i} style={{position:'relative',flexShrink:0}}>
+                <img src={img} alt={i===0?'Main image':'Extra angle '+i}
+                  onClick={()=>setFocusIdx(i)}
+                  title={i===0?'Main image — click to show above':'Click to show above'}
+                  style={{width:36,height:36,borderRadius:6,objectFit:'cover',display:'block',cursor:'pointer',
+                    border: focused ? '2px solid #8B5CF6' : '2px solid transparent',
+                    opacity: focused ? 1 : 0.65, transition:'opacity 0.12s, border-color 0.12s'}}/>
+                <button onClick={e=>{e.stopPropagation();removeGalleryImage(i)}} title="Remove this image" style={{
+                  position:'absolute',top:-4,right:-4,width:14,height:14,borderRadius:'50%',padding:0,
+                  background:'rgba(0,0,0,0.65)',color:'#fff',fontSize:9,lineHeight:1,cursor:'pointer',
+                  display:'flex',alignItems:'center',justifyContent:'center',border:'1px solid rgba(255,255,255,0.2)',
+                }}>×</button>
+              </div>
+            )
+          })}
+          {focusIdx != null && focusIdx > 0 && (
+            <button onClick={()=>makeMain(focusIdx)} title="Use the focused image as the deal's main image" style={{
+              flexShrink:0,padding:'4px 8px',borderRadius:6,fontSize:9,fontWeight:700,cursor:'pointer',
+              background:'rgba(139,92,246,0.12)',color:'#8B5CF6',border:'1px solid rgba(139,92,246,0.35)',
+            }}>★ Set main</button>
+          )}
         </div>
       )}
 
@@ -2504,7 +2547,9 @@ function BrandDealSection({ deals=[], onChange }) {
               onStartEdit={()=>{setEditId(deal.id);setEditBrand(deal.brand)}}
               onCommitEdit={commitRename}
               onCancelEdit={()=>{setEditId(null);setEditBrand('')}}
-              onImageChange={(img,imgs)=>updateDeal(deal.id, imgs ? {images:imgs,image:imgs[0],characterSheet:null} : {image:img,images:img?[img]:[],characterSheet:null})}
+              onImageChange={(img,imgs,opts)=>updateDeal(deal.id, imgs
+                ? {images:imgs, image:imgs[0] ?? null, ...(opts?.keepSheet && imgs[0]===deal.image ? {} : {characterSheet:null})}
+                : {image:img, images:img?[img]:[], characterSheet:null})}
               onDelete={()=>deleteDeal(deal.id)}
               onCategoryChange={cat=>updateDeal(deal.id,{category:cat})}
               onLightbox={(imgs,start)=>setLightbox({images:imgs,start:start||0})}
@@ -3721,6 +3766,8 @@ function ContentStudio({ influencer, onUpdate, onSaveToScripts, onGenerated, res
   ].filter(img=>img.url)
 
   const [productRef1, setProductRef1] = useState(() => { try { return localStorage.getItem(`hf_product_ref_1_${influencer.id}`) || null } catch { return null } })
+  // Close-up detail shots of product 1 (e.g. a hidden vent) — same product, ≤2
+  const [productDetailRefs, setProductDetailRefs] = useState(() => { try { return JSON.parse(localStorage.getItem(`hf_product_details_${influencer.id}`) || '[]') } catch { return [] } })
   const [productRef2, setProductRef2] = useState(() => { try { return localStorage.getItem(`hf_product_ref_2_${influencer.id}`) || null } catch { return null } })
   const [productRef3, setProductRef3] = useState(() => { try { return localStorage.getItem(`hf_product_ref_3_${influencer.id}`) || null } catch { return null } })
   const [productWorn, setProductWorn] = useState(() => { try { return JSON.parse(localStorage.getItem(`cs_settings_${influencer.id}`) || '{}').productWorn ?? false } catch { return false } })
@@ -3970,6 +4017,7 @@ function ContentStudio({ influencer, onUpdate, onSaveToScripts, onGenerated, res
 
   // Persist product refs — base64 images keyed per influencer
   useEffect(() => { try { productRef1 ? localStorage.setItem(`hf_product_ref_1_${influencer.id}`, productRef1) : localStorage.removeItem(`hf_product_ref_1_${influencer.id}`) } catch {} }, [productRef1, influencer.id])
+  useEffect(() => { try { productDetailRefs.length ? localStorage.setItem(`hf_product_details_${influencer.id}`, JSON.stringify(productDetailRefs)) : localStorage.removeItem(`hf_product_details_${influencer.id}`) } catch {} }, [productDetailRefs, influencer.id])
   useEffect(() => { try { productRef2 ? localStorage.setItem(`hf_product_ref_2_${influencer.id}`, productRef2) : localStorage.removeItem(`hf_product_ref_2_${influencer.id}`) } catch {} }, [productRef2, influencer.id])
   useEffect(() => { try { productRef3 ? localStorage.setItem(`hf_product_ref_3_${influencer.id}`, productRef3) : localStorage.removeItem(`hf_product_ref_3_${influencer.id}`) } catch {} }, [productRef3, influencer.id])
 
@@ -3987,6 +4035,15 @@ function ContentStudio({ influencer, onUpdate, onSaveToScripts, onGenerated, res
     else if (!productRef2) { setProductRef2(url) }
     else if (!productRef3) { setProductRef3(url) }
     else { setProductRef1(url) }
+  }
+
+  // Add a close-up detail shot of product 1 (≤2). If no product is loaded yet,
+  // the deal's main image becomes Product 1 so the detail always has an anchor.
+  // slice(-2): the newest click evicts the oldest — a capped slice(0,2) made the
+  // third click a silent no-op that read as broken.
+  function addProductDetail(url, dealMainUrl) {
+    if (!productRef1 && dealMainUrl) setProductRef1(dealMainUrl)
+    setProductDetailRefs(prev => (prev.includes(url) ? prev : [...prev, url].slice(-2)))
   }
 
   // Persist video settings per-influencer whenever they change (skip during restore to avoid writing stale state)
@@ -4022,30 +4079,11 @@ function ContentStudio({ influencer, onUpdate, onSaveToScripts, onGenerated, res
     const her = isMale ? 'him' : 'her'
     const his = isMale ? 'his' : 'her'
 
-    // Build ordered image tag map — influencer refs first, then products
-    // Higgsfield assigns @image_N in the order refs are passed to generate_video
-    const prodImgs = [
-      productRef1 && { role: 'product1', url: productRef1 },
-      productRef2 && { role: 'product2', url: productRef2 },
-      productRef3 && { role: 'product3', url: productRef3 },
-    ].filter(Boolean)
+    // Tag map derived from the SAME ordered list the upload uses (orderedRefs) —
+    // @image_N binds by position, so deriving both from one list makes a
+    // tag/upload mismatch structurally impossible.
     const tagMap = {}
-    if (startFrameUrl) {
-      // Start frame mode: @image_1 = start frame (identity + outfit baked in), @image_2+ = products
-      tagMap['identity'] = '@image_1'
-      prodImgs.forEach((prod, i) => { tagMap[prod.role] = `@image_${i + 2}` })
-    } else {
-      const infImgs = [
-        influencer.mainImage && { role: 'identity', url: influencer.mainImage },
-        selectedWardrobe
-          ? { role: 'wardrobe',  url: selectedWardrobe.image }
-          : influencer.characterSheetImage && { role: 'charsheet', url: influencer.characterSheetImage },
-        influencer.closeUpImage1 && { role: 'closeup1', url: influencer.closeUpImage1 },
-        influencer.closeUpImage2 && { role: 'closeup2', url: influencer.closeUpImage2 },
-      ].filter(Boolean)
-      const homeImgEntry = selectedHome ? [{ role: 'home', url: selectedHome.image }] : []
-      ;[...infImgs, ...homeImgEntry, ...prodImgs].forEach((img, i) => { tagMap[img.role] = `@image_${i + 1}` })
-    }
+    orderedRefs().forEach((img, i) => { tagMap[img.role] = `@image_${i + 1}` })
 
     // Shot count — oner = always 1, multi = auto from duration
     const shotCount = shotMode === 'oner' ? 1 : duration <= 5 ? 1 : duration <= 8 ? 2 : duration <= 12 ? 3 : 4
@@ -4114,31 +4152,11 @@ function ContentStudio({ influencer, onUpdate, onSaveToScripts, onGenerated, res
     // the 2s hook shot, and Seedance invented lines for the silent shots)
     const dialogueLines = splitDialogueSentences(fullDialogue)
 
-    // Product logic rules (belt+suspenders reference alongside PRODUCT section)
-    const productRules = []
-    if (tagMap.product1) productRules.push(`${tagMap.product1} is always the same object — same color, label position, and size. Never substituted.${wearMode ? ` ${tagMap.product1} is WORN — never held. ${She} naturally interacts with it once or twice — a brief touch or glance — without overdoing it.` : ''}`)
-    if (tagMap.product2) productRules.push(`${tagMap.product2} is always the same object — never substituted.`)
-    if (tagMap.product3) productRules.push(`${tagMap.product3} is always the same object — never substituted.`)
-
-    // PRODUCT section — dedicated block placed between WARDROBE and ENVIRONMENT
-    const prodEntries = [
-      tagMap.product1 && { tag: tagMap.product1, n: 1 },
-      tagMap.product2 && { tag: tagMap.product2, n: 2 },
-      tagMap.product3 && { tag: tagMap.product3, n: 3 },
-    ].filter(Boolean)
-    let productSection = ''
-    if (prodEntries.length > 0) {
-      const pLines = ['PRODUCT:']
-      pLines.push('')
-      prodEntries.forEach(({ tag, n }) => {
-        pLines.push(`${tag} — product reference ${n}. Use as the exact source for this product's color, shape, label text and orientation, and proportions.`)
-      })
-      pLines.push('')
-      const allProdTags = prodEntries.map(e => e.tag).join(' and ')
-      pLines.push(`The product must appear identical in every frame — same label text and orientation, same colors, same proportions throughout. Never substituted, recolored, or modified. ${allProdTags} ${prodEntries.length > 1 ? 'contribute' : 'contributes'} ONLY the product — never the face, identity, wardrobe, environment, or color grade.`)
-      if (wearMode) pLines.push(`Exception: ${tagMap.product1} is WORN — ${she} interacts with it naturally once or twice — a brief touch or glance — without overdoing it.`)
-      productSection = pLines.join('\n')
-    }
+    // Product logic rules + PRODUCT section — shared pure builders
+    // (utils/videoPromptSections.js) handle independent products AND close-up
+    // detail refs of product 1, which must be declared as the SAME object.
+    const productRules = buildProductRules(tagMap, { wearMode, She })
+    const productSection = buildProductSection(tagMap, { wearMode, she })
 
     // Build shots
     const shotDurs = shotCount === 1 ? [duration]
@@ -4310,17 +4328,39 @@ ${shotsWithBeats.join('\n\n')}`
     }
   }
 
-  function buildRefs() {
-    return [
-      influencer.mainImage,
-      selectedWardrobe?.image || influencer.characterSheetImage,
-      influencer.closeUpImage1,
-      influencer.closeUpImage2,
-      selectedHome?.image,
-      productRef1,
-      productRef2,
-      productRef3,
+  // Single source of truth for reference ordering. Higgsfield binds @image_N by
+  // POSITION in the upload list, so the tag map and the uploaded refs must agree
+  // exactly — tagMap (buildPrompt) and referenceImages (generate call) are BOTH
+  // derived from this list. Entries are gated on their URL, never on the parent
+  // object, so an imageless wardrobe slot can't claim a tag it never uploads.
+  function orderedRefs() {
+    const prodRefs = [
+      productRef1 && { role: 'product1', url: productRef1 },
+      productRef2 && { role: 'product2', url: productRef2 },
+      productRef3 && { role: 'product3', url: productRef3 },
     ].filter(Boolean)
+    const detailRefs = (productRef1 ? productDetailRefs.slice(0, 2) : [])
+      .map((url, i) => ({ role: `productDetail${i + 1}`, url }))
+
+    if (startFrameUrl) {
+      // Start frame mode: @image_1 = start frame (identity + outfit + scene baked in)
+      return [{ role: 'identity', url: startFrameUrl }, ...prodRefs, ...detailRefs]
+    }
+    return [
+      influencer.mainImage && { role: 'identity', url: influencer.mainImage },
+      selectedWardrobe?.image
+        ? { role: 'wardrobe', url: selectedWardrobe.image }
+        : influencer.characterSheetImage && { role: 'charsheet', url: influencer.characterSheetImage },
+      influencer.closeUpImage1 && { role: 'closeup1', url: influencer.closeUpImage1 },
+      influencer.closeUpImage2 && { role: 'closeup2', url: influencer.closeUpImage2 },
+      selectedHome?.image && { role: 'home', url: selectedHome.image },
+      ...prodRefs,
+      ...detailRefs,
+    ].filter(Boolean)
+  }
+
+  function buildRefs() {
+    return orderedRefs().map(r => r.url)
   }
 
   function saveToHistory() {
@@ -4415,9 +4455,7 @@ ${shotsWithBeats.join('\n\n')}`
         aspectRatio: aspect,
         duration,
         count: outputs,
-        referenceImages: startFrameUrl
-          ? [startFrameUrl, productRef1, productRef2, productRef3].filter(Boolean)
-          : buildRefs(),
+        referenceImages: buildRefs(), // orderedRefs handles start-frame mode internally
         startFrameUrl: null,  // start frame is passed as @image_1 via referenceImages; start_image role would duplicate it
         audioRef: audioDataUrl || null,
         model: videoModel,
@@ -4674,7 +4712,7 @@ ${shotsWithBeats.join('\n\n')}`
       <Sec>
         <CSStepHeader n={2} title="Products" sub="Drag in up to 3 product images (optional)"/>
         <div style={{display:'flex',gap:10}}>
-          <CSProductSlot value={productRef1} onChange={v=>{setProductRef1(v);if(!v){setProductWorn(false);localStorage.setItem('hf_product_worn','0')}}} dragOver={dragOver1} setDragOver={setDragOver1} fileRef={productFileRef1} label="Product 1"/>
+          <CSProductSlot value={productRef1} onChange={v=>{setProductRef1(v);if(!v){setProductWorn(false);localStorage.setItem('hf_product_worn','0');setProductDetailRefs([])}}} dragOver={dragOver1} setDragOver={setDragOver1} fileRef={productFileRef1} label="Product 1"/>
           <CSProductSlot value={productRef2} onChange={setProductRef2} dragOver={dragOver2} setDragOver={setDragOver2} fileRef={productFileRef2} label="Product 2"/>
           <CSProductSlot value={productRef3} onChange={setProductRef3} dragOver={dragOver3} setDragOver={setDragOver3} fileRef={productFileRef3} label="Product 3"/>
         </div>
@@ -4693,6 +4731,23 @@ ${shotsWithBeats.join('\n\n')}`
                 }}>{opt}</button>
               )
             })}
+          </div>
+        )}
+        {productRef1 && productDetailRefs.length > 0 && (
+          <div style={{marginTop:12}}>
+            <div style={{fontSize:11,fontWeight:600,color:'var(--text-tertiary)',marginBottom:6}}>Detail close-ups — same product as Product 1</div>
+            <div style={{display:'flex',gap:8}}>
+              {productDetailRefs.map(url=>(
+                <div key={url} style={{position:'relative'}}>
+                  <img src={url} style={{width:44,height:56,objectFit:'cover',borderRadius:8,border:'1.5px solid var(--border)',display:'block'}} alt="product detail"/>
+                  <button onClick={()=>setProductDetailRefs(prev=>prev.filter(u=>u!==url))} aria-label="Remove detail image" style={{
+                    position:'absolute',top:-6,right:-6,width:18,height:18,borderRadius:'50%',
+                    background:'var(--surface)',border:'1px solid var(--border)',color:'var(--text-secondary)',
+                    fontSize:11,lineHeight:1,cursor:'pointer',display:'flex',alignItems:'center',justifyContent:'center',padding:0,
+                  }}>×</button>
+                </div>
+              ))}
+            </div>
           </div>
         )}
         {(influencer.brandDeals||[]).filter(d=>d.image||d.characterSheet).length>0&&(
@@ -4736,6 +4791,20 @@ ${shotsWithBeats.join('\n\n')}`
                               color: active ? '#8B5CF6' : 'var(--text-secondary)',
                               transition:'all 0.12s',
                             }}>{label}</button>
+                          )
+                        })}
+                      </div>
+                    )}
+                    {(deal.images||[]).length > 1 && (
+                      <div style={{display:'flex',gap:4,justifyContent:'center'}} title="Detail shots — click to blend into the video as close-ups of this product">
+                        {(deal.images||[]).slice(1, 4).map(img=>{
+                          const added = productDetailRefs.includes(img)
+                          return (
+                            <img key={img} src={img} alt={`${deal.brand} detail`}
+                              onClick={()=>added ? setProductDetailRefs(prev=>prev.filter(u=>u!==img)) : addProductDetail(img, activeUrl)}
+                              style={{width:20,height:26,objectFit:'cover',borderRadius:4,cursor:'pointer',display:'block',
+                                border: added ? '1.5px solid #8B5CF6' : '1px solid var(--border)',
+                                opacity: added ? 1 : 0.75}}/>
                           )
                         })}
                       </div>
