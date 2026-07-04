@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { validateTunedPrompt, getCameraKnowledge, getTunerModel, setTunerModel, TUNER_MODELS, DEFAULT_TUNER_MODEL } from './videoPromptTuner.js'
+import { validateTunedPrompt, getCameraKnowledge, getTunerModel, setTunerModel, getTunerModels } from './videoPromptTuner.js'
 import { BAKED_CAMERA_KNOWLEDGE } from './cameraKnowledge.js'
 
 const ORIGINAL = `FORMAT: 15s / 4 SHOTS / direct address
@@ -115,17 +115,18 @@ describe('tuner model preference', () => {
   })
   afterEach(() => vi.unstubAllGlobals())
 
-  it('defaults to the most powerful model (Fable 5)', () => {
-    expect(DEFAULT_TUNER_MODEL).toBe('claude-fable-5')
-    expect(getTunerModel()).toBe('claude-fable-5')
+  it('defaults to the most powerful model of the active provider', () => {
+    expect(getTunerModel()).toBe('claude-fable-5') // no key → claude is display default
+    localStorage.setItem('glm_api_key', 'glm-secret')
+    expect(getTunerModel()).toBe('glm-5.2')
   })
 
-  it('offers the default first and every option has an id and label', () => {
-    expect(TUNER_MODELS[0].id).toBe(DEFAULT_TUNER_MODEL)
-    for (const m of TUNER_MODELS) {
-      expect(typeof m.id).toBe('string')
-      expect(m.label.length).toBeGreaterThan(0)
-    }
+  it('lists the active provider’s models, most powerful first', () => {
+    expect(getTunerModels()[0].id).toBe('claude-fable-5')
+    localStorage.setItem('glm_api_key', 'glm-secret')
+    const glmModels = getTunerModels()
+    expect(glmModels[0].id).toBe('glm-5.2')
+    for (const m of glmModels) expect(m.label.length).toBeGreaterThan(0)
   })
 
   it('persists a valid choice and returns it', () => {
@@ -134,14 +135,20 @@ describe('tuner model preference', () => {
     expect(localStorage.getItem('hf_tuner_model')).toBe('claude-haiku-4-5')
   })
 
-  it('ignores an unknown persisted model and falls back to the default', () => {
+  it('ignores a persisted model the active provider does not offer', () => {
     localStorage.setItem('hf_tuner_model', 'claude-sonnet-4-6')
-    expect(getTunerModel()).toBe(DEFAULT_TUNER_MODEL)
+    expect(getTunerModel()).toBe('claude-fable-5')
+    // a claude pick left over after switching to GLM falls back to GLM's default
+    localStorage.setItem('hf_tuner_model', 'claude-opus-4-8')
+    localStorage.setItem('glm_api_key', 'glm-secret')
+    expect(getTunerModel()).toBe('glm-5.2')
   })
 
-  it('setTunerModel rejects unknown ids without touching storage', () => {
-    setTunerModel('gpt-5')
+  it('setTunerModel rejects ids the active provider does not offer', () => {
+    setTunerModel('glm-5.2') // glm model while claude is active
     expect(localStorage.getItem('hf_tuner_model')).toBe(null)
-    expect(getTunerModel()).toBe(DEFAULT_TUNER_MODEL)
+    localStorage.setItem('glm_api_key', 'glm-secret')
+    setTunerModel('glm-5.2')
+    expect(getTunerModel()).toBe('glm-5.2')
   })
 })

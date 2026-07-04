@@ -3,7 +3,8 @@ import { createPortal } from 'react-dom'
 import { generateNImages, generatePosePreviews, generateSingleImage, clearPendingPhoto, getPendingPhoto, pollAllJobs, hasPhotoGenSession, initSession, isCancelError } from '../utils/higgsfieldGenerate'
 import { downloadImage } from '../utils/imageUtils'
 import { isHFConnected } from '../utils/higgsfieldAuth'
-import { buildCharSheetPrompt, buildCharSheetPromptWithClaude } from '../utils/charSheetPrompt'
+import { buildCharSheetPrompt, buildCharSheetPromptWithAI } from '../utils/charSheetPrompt'
+import { getAiKey } from '../utils/aiProvider'
 import { useInfluencers, useBrandDeals } from '../store'
 import WardrobeDrawer from '../components/WardrobeDrawer'
 import {
@@ -630,12 +631,11 @@ export default function PhotoStudioPanel({ influencer, onGoToWardrobe, onUseAsSt
     setPropProgress(p => ({ ...p, [targetIdx]: 0 }))
     try {
       let prompt = null
-      const claudeKey = localStorage.getItem('claude_api_key')
-      if (claudeKey) {
+      if (getAiKey()) {
         try {
           setPropProgress(p => ({ ...p, [targetIdx]: 5 }))
           setPropClaudeStatus(s => ({ ...s, [targetIdx]: 'analyzing' }))
-          prompt = await buildCharSheetPromptWithClaude(slot.image, propText || 'product', '', claudeKey)
+          prompt = await buildCharSheetPromptWithAI(slot.image, propText || 'product', '')
           setPropClaudeStatus(s => ({ ...s, [targetIdx]: 'done' }))
           setTimeout(() => setPropClaudeStatus(s => ({ ...s, [targetIdx]: null })), 3000)
         } catch (e) {

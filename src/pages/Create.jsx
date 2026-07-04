@@ -4,6 +4,7 @@ import { useNavigate, useLocation } from 'react-router-dom'
 import { useInfluencers, generateId } from '../store'
 import { buildThreeVariationPrompts } from '../utils/systemPrompt'
 import { analyzeBackstory } from '../utils/backstoryAnalysis'
+import { getAiKey } from '../utils/aiProvider'
 import { generateThreeImages } from '../utils/higgsfieldGenerate'
 import { modelEstMs } from '../utils/modelCaps'
 import { isHFConnected, startHiggsfieldOAuthPopup } from '../utils/higgsfieldAuth'
@@ -1700,8 +1701,8 @@ export default function Create() {
           </div>
         )}
 
-        {/* Claude API key nudge — same card DNA as HF, visually secondary */}
-        {step === 1 && !localStorage.getItem('claude_api_key') && (
+        {/* AI key nudge — same card DNA as HF, visually secondary */}
+        {step === 1 && !getAiKey() && (
           <div style={{
             marginBottom: 32, borderRadius: 14, padding: '1.5px',
             background: 'rgba(245,158,11,0.45)',
@@ -1719,7 +1720,7 @@ export default function Create() {
               }}>
                 <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#D97706" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 2L15.09 8.26L22 9.27L17 14.14L18.18 21.02L12 17.77L5.82 21.02L7 14.14L2 9.27L8.91 8.26L12 2Z"/></svg>
               </div>
-              <span style={{ flex: 1, fontSize: 13, fontWeight: 700, color: 'var(--text-primary)' }}>Connect Claude for smarter prompts</span>
+              <span style={{ flex: 1, fontSize: 13, fontWeight: 700, color: 'var(--text-primary)' }}>Connect Claude or GLM for smarter prompts</span>
               <button onClick={() => navigate('/settings')} style={{
                 flexShrink: 0, padding: '7px 14px', borderRadius: 8,
                 background: 'transparent',

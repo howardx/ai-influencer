@@ -1,6 +1,4 @@
-import { reportClaudeAuthFailure } from './claudeHealth'
-
-const CLAUDE_KEY = 'claude_api_key'
+import { aiComplete, getAiKey, getActiveProvider } from './aiProvider'
 
 const SYSTEM = `You are a visual prompt assistant for an AI influencer image generator.
 Given a character's backstory and physical description, extract two things:
@@ -13,54 +11,36 @@ Respond with a JSON object only — no explanation, no markdown:
 {"styleSignal":"tag1, tag2","sceneNiche":"lifestyle"}`
 
 export async function analyzeBackstory(backstory, physicalDesc) {
-  const apiKey = localStorage.getItem(CLAUDE_KEY)
-  if (!apiKey) { console.log('[Claude] no API key in localStorage — skipping backstory analysis'); return null }
-  if (!backstory?.trim()) { console.log('[Claude] no backstory — skipping'); return null }
+  const label = getActiveProvider().label
+  if (!getAiKey()) { console.log(`[${label}] no API key in localStorage — skipping backstory analysis`); return null }
+  if (!backstory?.trim()) { console.log(`[${label}] no backstory — skipping`); return null }
 
-  console.log('[Claude] analyzing backstory...')
+  console.log(`[${label}] analyzing backstory...`)
   const userMsg = `Backstory: ${backstory.trim()}\nPhysical description: ${physicalDesc?.trim() || 'not specified'}`
 
   try {
-    const res = await fetch('/api/claude', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'x-api-key': apiKey,
-      },
-      body: JSON.stringify({
-        model: 'claude-haiku-4-5-20251001',
-        max_tokens: 150,
-        system: SYSTEM,
-        messages: [{ role: 'user', content: userMsg }],
-      }),
+    const result = await aiComplete({
+      tier: 'light',
+      maxTokens: 150,
+      system: SYSTEM,
+      user: userMsg,
     })
+    if (!result.ok) { console.error(`[${label}] failed:`, result.reason); return null }
 
-    if (!res.ok) {
-      reportClaudeAuthFailure(res.status)
-      console.error('[Claude] HTTP error', res.status, await res.text().catch(() => ''))
-      return null
-    }
-
-    const data = await res.json()
-    if (data.error) {
-      console.error('[Claude] API error:', data.error)
-      return null
-    }
-
-    const text = data.content?.[0]?.text?.trim()
-    if (!text) { console.error('[Claude] empty response'); return null }
+    const text = result.text
+    if (!text) { console.error(`[${label}] empty response`); return null }
 
     const jsonText = text.replace(/^```(?:json)?\s*/i, '').replace(/\s*```\s*$/i, '').trim()
     const parsed = JSON.parse(jsonText)
-    if (!parsed.sceneNiche) { console.error('[Claude] missing sceneNiche in response:', parsed); return null }
+    if (!parsed.sceneNiche) { console.error(`[${label}] missing sceneNiche in response:`, parsed); return null }
 
-    console.log('[Claude] success:', parsed)
+    console.log(`[${label}] success:`, parsed)
     return {
       sceneNiche: parsed.sceneNiche,
       tags: (parsed.styleSignal || '').split(',').map(s => s.trim()).filter(Boolean),
     }
   } catch (e) {
-    console.error('[Claude] exception:', e)
+    console.error(`[${label}] exception:`, e)
     return null
   }
 }

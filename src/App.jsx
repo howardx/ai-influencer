@@ -5,7 +5,7 @@ import { ThemeProvider, useTheme } from './context/theme'
 import { StoreProvider } from './store'
 import { silentRefreshHFToken } from './utils/higgsfieldAuth'
 import Nav from './components/Nav'
-import ClaudeKeyBanner from './components/ClaudeKeyBanner'
+import AiKeyBanner from './components/AiKeyBanner'
 import Landing from './pages/Landing'
 import Influencers from './pages/Influencers'
 import Inspiration from './pages/Inspiration'
@@ -76,7 +76,7 @@ export default function App() {
         <Route path="/auth/callback" element={<AuthCallback />} />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
-      <ClaudeKeyBanner />
+      <AiKeyBanner />
       <FeedbackButton />
       <Analytics />
     </BrowserRouter>

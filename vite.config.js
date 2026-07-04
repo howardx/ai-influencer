@@ -181,8 +181,49 @@ const claudePlugin = {
   },
 }
 
+// Local dev GLM proxy — mirrors api/glm.js for Vercel production. GLM has no
+// region block, so no SOCKS routing is needed; plain fetch is enough.
+const GLM_UPSTREAMS = {
+  zai: 'https://api.z.ai/api/paas/v4/chat/completions',
+  // Coding Plan keys only work on the dedicated coding endpoint (the general
+  // one answers 429 code 1113 "Insufficient balance" for them).
+  'zai-coding': 'https://api.z.ai/api/coding/paas/v4/chat/completions',
+  bigmodel: 'https://open.bigmodel.cn/api/paas/v4/chat/completions',
+}
+const glmPlugin = {
+  name: 'glm-proxy',
+  configureServer(server) {
+    server.middlewares.use('/api/glm', async (req, res) => {
+      res.setHeader('Access-Control-Allow-Origin', '*')
+      res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS')
+      res.setHeader('Access-Control-Allow-Headers', 'Content-Type, x-api-key, x-ai-platform')
+      if (req.method === 'OPTIONS') { res.writeHead(200); res.end(); return }
+      if (req.method !== 'POST') { res.writeHead(405); res.end('Method not allowed'); return }
+      const apiKey = req.headers['x-api-key']
+      if (!apiKey) { res.writeHead(400, { 'Content-Type': 'application/json' }); res.end(JSON.stringify({ error: { message: 'Missing x-api-key' } })); return }
+      const chunks = []
+      req.on('data', c => chunks.push(c))
+      await new Promise(r => req.on('end', r))
+      const body = Buffer.concat(chunks).toString()
+      try {
+        const upstream = await fetch(GLM_UPSTREAMS[req.headers['x-ai-platform']] || GLM_UPSTREAMS.zai, {
+          method: 'POST',
+          headers: { 'Authorization': `Bearer ${apiKey}`, 'content-type': 'application/json' },
+          body,
+        })
+        const text = await upstream.text()
+        res.writeHead(upstream.status, { 'Content-Type': 'application/json' })
+        res.end(text)
+      } catch (e) {
+        res.writeHead(500, { 'Content-Type': 'application/json' })
+        res.end(JSON.stringify({ error: { message: e.message } }))
+      }
+    })
+  },
+}
+
 export default defineConfig({
-  plugins: [react(), searchPlugin, imgProxyPlugin, claudePlugin],
+  plugins: [react(), searchPlugin, imgProxyPlugin, claudePlugin, glmPlugin],
   server: {
     proxy: {
       '/api/hf': {

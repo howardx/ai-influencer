@@ -3,7 +3,8 @@ import { useBrandDeals, generateId } from '../store'
 import { compressImage, downloadImage } from '../utils/imageUtils'
 import { generateSingleImage } from '../utils/higgsfieldGenerate'
 import { isHFConnected } from '../utils/higgsfieldAuth'
-import { buildCharSheetPrompt, buildCharSheetPromptWithClaude } from '../utils/charSheetPrompt'
+import { buildCharSheetPrompt, buildCharSheetPromptWithAI } from '../utils/charSheetPrompt'
+import { getAiKey } from '../utils/aiProvider'
 import Lightbox from '../components/Lightbox'
 
 function NewDealModal({ onClose, onSave }) {
@@ -319,22 +320,22 @@ export default function BrandDeals() {
     setGenProgress(p => ({ ...p, [deal.id]: 0 }))
 
     try {
-      // Step 1 — Claude studies the image and writes the full Higgsfield prompt
+      // Step 1 — the active AI provider studies the image and writes the full Higgsfield prompt
       let imagePrompt = null
-      const claudeKey = localStorage.getItem('claude_api_key')
-      console.log('[BrandDeals] claudeKey found:', !!claudeKey, '| deal.image exists:', !!deal.image)
-      if (claudeKey && deal.image) {
+      const aiKey = getAiKey()
+      console.log('[BrandDeals] AI key found:', !!aiKey, '| deal.image exists:', !!deal.image)
+      if (aiKey && deal.image) {
         try {
           setGenProgress(p => ({ ...p, [deal.id]: 5 }))
-          console.log('[BrandDeals] Calling Claude...')
-          imagePrompt = await buildCharSheetPromptWithClaude(deal.image, deal.brand, deal.category, claudeKey)
-          console.log('[BrandDeals] Claude returned prompt:', imagePrompt?.slice(0, 120))
+          console.log('[BrandDeals] Calling AI provider...')
+          imagePrompt = await buildCharSheetPromptWithAI(deal.image, deal.brand, deal.category)
+          console.log('[BrandDeals] AI returned prompt:', imagePrompt?.slice(0, 120))
         } catch (e) {
-          console.error('[BrandDeals] Claude failed:', e.message)
+          console.error('[BrandDeals] AI analysis failed:', e.message)
         }
       }
 
-      // Step 2 — fall back to template if Claude wasn't available or failed
+      // Step 2 — fall back to template if the AI provider wasn't available or failed
       if (!imagePrompt) {
         console.log('[BrandDeals] Using text fallback prompt')
         imagePrompt = buildCharSheetPrompt(deal.brand, deal.category)

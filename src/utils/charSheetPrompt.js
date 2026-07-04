@@ -1,4 +1,4 @@
-import { reportClaudeAuthFailure } from './claudeHealth'
+import { aiComplete, getActiveProvider } from './aiProvider'
 
 export function buildInfluencerSheetPrompt(inf) {
   const phys = inf.physicalDesc ? `The character: ${inf.physicalDesc}. ` : ''
@@ -29,31 +29,17 @@ export function buildCharSheetPrompt(brand, category, productDesc = null, angles
   return `Professional product character sheet on a pure white (#FFFFFF) background. The subject is a ${subject}. ${angleSpec} Create a single composite image with exactly 6 panels in a strict uniform 3-column by 2-row grid. All 6 panels are perfectly equal in size — no panel larger or smaller than another, no gaps, no overlapping, strict grid alignment. The product is visually identical across all panels — same exact colors, materials, textures, logos, design details, and proportions throughout. For any angle or surface not explicitly described, match exactly the colors, materials, and finish shown in the reference image — do not invent or assume any detail. All branding, logos, and text physically on the product are preserved and clearly visible. No annotation labels, no "Front" / "Back" / "Side" captions, no text overlays of any kind. Studio product photography: soft even lighting, sharp focus throughout, perfectly clean white background, professional commercial quality. 16:9 landscape format.`
 }
 
-export async function buildCharSheetPromptWithClaude(images, brand, category, apiKey) {
-  // images is an array of data URLs
-  const imageBlocks = (Array.isArray(images) ? images : [images]).map(dataUrl => {
-    const [header, base64] = dataUrl.split(',')
-    const mediaType = header.match(/:(.*?);/)?.[1] || 'image/jpeg'
-    return { type: 'image', source: { type: 'base64', media_type: mediaType, data: base64 } }
-  })
-
-  const imageCount = imageBlocks.length
-  const res = await fetch('/api/claude', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'x-api-key': apiKey,
-      'anthropic-version': '2023-06-01',
-    },
-    body: JSON.stringify({
-      model: 'claude-sonnet-4-6',
-      max_tokens: 2000,
-      system: `You are a luxury product expert and photography director. You have deep knowledge of designer brands, product lines, and how they look from every angle. You study product images and use your training knowledge to produce detailed, accurate descriptions. Output JSON only — nothing else.`,
-      messages: [{
-        role: 'user',
-        content: [
-          ...imageBlocks,
-          { type: 'text', text: `Brand: ${brand}${category ? `\nCategory: ${category}` : ''}
+export async function buildCharSheetPromptWithAI(images, brand, category) {
+  // images is an array of data URLs — translated per provider by aiComplete
+  const imageParts = (Array.isArray(images) ? images : [images]).map(dataUrl => ({ type: 'image', dataUrl }))
+  const imageCount = imageParts.length
+  const result = await aiComplete({
+    tier: 'vision',
+    maxTokens: 2000,
+    system: `You are a luxury product expert and photography director. You have deep knowledge of designer brands, product lines, and how they look from every angle. You study product images and use your training knowledge to produce detailed, accurate descriptions. Output JSON only — nothing else.`,
+    user: [
+      ...imageParts,
+      { type: 'text', text: `Brand: ${brand}${category ? `\nCategory: ${category}` : ''}
 
 You have been given ${imageCount} image${imageCount > 1 ? 's' : ''} of this product from different angles. Study all of them and identify exactly what product this is. Use what you can see across all images AND your training knowledge to describe it accurately from every angle.
 
@@ -64,20 +50,13 @@ Output a JSON object with exactly two fields:
 "angles" — exactly 6 panel descriptions for a professional character sheet, each with specific visual details for that angle. Use your product knowledge to describe what is actually on each surface — the real back closure, real side panels, real sole or lining — not generic guesses. Example for a cap: "front view showing embroidered H logo on structured crown, left profile showing side panel seam and brim edge, right profile showing matching side panel, rear view showing metal Hermès clasp and tonal strap, top-down view showing crown stitching pattern, underside of brim showing contrast lining color and stitching"
 
 Output only valid JSON. No explanation, no markdown.` },
-        ],
-      }],
-    }),
+    ],
   })
 
-  if (!res.ok) {
-    reportClaudeAuthFailure(res.status)
-    throw new Error(`Claude analysis failed (${res.status})`)
-  }
-  const data = await res.json()
-  if (data.error) throw new Error(data.error.message)
-
-  const text = data.content?.[0]?.text?.trim()
-  if (!text) throw new Error('Claude returned empty response')
+  const label = getActiveProvider().label
+  if (!result.ok) throw new Error(`${label} analysis failed (${result.reason})`)
+  const text = result.text
+  if (!text) throw new Error(`${label} returned empty response`)
 
   // Try to extract JSON from anywhere in the response
   let json = null

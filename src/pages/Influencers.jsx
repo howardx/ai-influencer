@@ -6,13 +6,14 @@ import Lightbox from '../components/Lightbox'
 import { compressImage, downloadImage } from '../utils/imageUtils'
 import { splitDialogueSentences, distributeSentences } from '../utils/dialogueSplit'
 import { buildProductSection, buildProductRules } from '../utils/videoPromptSections'
-import { tuneVideoPrompt, getTunerModel, setTunerModel, TUNER_MODELS } from '../utils/videoPromptTuner'
+import { tuneVideoPrompt, getTunerModel, setTunerModel, getTunerModels } from '../utils/videoPromptTuner'
+import { getAiKey, getActiveProvider } from '../utils/aiProvider'
 import { generateSingleImage, generateThreeImages, generateVideo, initSession, pollAllJobs, getPendingGens, clearPendingGen, getPendingVideo, clearPendingVideo, resumeVideoJob, isCancelError } from '../utils/higgsfieldGenerate'
 import { buildThreeVariationPrompts } from '../utils/systemPrompt'
 import { gColor, pLabel } from '../utils/influencerUtils'
 import { useTheme } from '../context/theme'
 import { isHFConnected } from '../utils/higgsfieldAuth'
-import { buildCharSheetPrompt, buildCharSheetPromptWithClaude } from '../utils/charSheetPrompt'
+import { buildCharSheetPrompt, buildCharSheetPromptWithAI } from '../utils/charSheetPrompt'
 import PhotoStudioPanel from './PhotoStudio'
 import WardrobeDrawer from '../components/WardrobeDrawer'
 
@@ -2503,17 +2504,16 @@ function BrandDealSection({ deals=[], onChange }) {
     setGenProgress(p=>({...p,[deal.id]:0}))
 
     let imagePrompt = null
-    const claudeKey = localStorage.getItem('claude_api_key')
     const allImages = deal.images?.length ? deal.images : (deal.image ? [deal.image] : [])
-    if (claudeKey && allImages.length) {
+    if (getAiKey() && allImages.length) {
       setClaudeStatus(s=>({...s,[deal.id]:'analyzing'}))
       try {
         setGenProgress(p=>({...p,[deal.id]:5}))
-        imagePrompt = await buildCharSheetPromptWithClaude(allImages, deal.brand, deal.category, claudeKey)
+        imagePrompt = await buildCharSheetPromptWithAI(allImages, deal.brand, deal.category)
         setClaudeStatus(s=>({...s,[deal.id]:'done'}))
         setTimeout(()=>setClaudeStatus(s=>({...s,[deal.id]:null})),3000)
       } catch(e) {
-        alert('Claude: ' + e.message)
+        alert(getActiveProvider().label + ': ' + e.message)
         setClaudeStatus(s=>({...s,[deal.id]:'error:'+e.message}))
         setTimeout(()=>setClaudeStatus(s=>({...s,[deal.id]:null})),5000)
       }
@@ -4497,18 +4497,16 @@ ${shotsWithBeats.join('\n\n')}`
     setGenProgress(0)
     setElapsed(0)
     try { saveToHistory() } catch { /* never block generation over history */ }
-    // Optional Claude pass: rewrites per-shot camera language with a real
+    // Optional AI pass: rewrites per-shot camera language with a real
     // movement vocabulary. The validator inside tuneVideoPrompt guarantees the
     // deterministic prompt ships unchanged if the tune touches anything
     // load-bearing (tags, dialogue, LOGIC RULE, no-music, FORMAT).
     let finalPrompt = buildPrompt()
-    const claudeKey = (() => { try { return localStorage.getItem('claude_api_key') } catch { return null } })()
-    if (claudeTune && claudeKey) {
+    if (claudeTune && getAiKey()) {
       setTuneStatus('tuning')
       const tuned = await tuneVideoPrompt({
         prompt: finalPrompt,
         dialogueLines: splitDialogueSentences(dialogue.trim()),
-        apiKey: claudeKey,
         context: { camera, vibe, duration, shotMode, hasProduct: !!productRef1, productWorn },
       })
       finalPrompt = tuned.prompt
@@ -5611,11 +5609,11 @@ ${shotsWithBeats.join('\n\n')}`
           </div>
         )}
 
-        {/* Claude camera tuning — optional pass over the deterministic prompt */}
+        {/* AI camera tuning — optional pass over the deterministic prompt */}
         <div style={{padding:'0 10px', display:'flex', alignItems:'center', gap:8}}>
           <button
             onClick={()=>{const v=!claudeTune; setClaudeTune(v); try{localStorage.setItem('hf_claude_tune', v?'1':'0')}catch{}}}
-            title={localStorage.getItem('claude_api_key') ? 'Claude rewrites each shot’s camera movement language (dolly, arc, push-in…) before generating. Dialogue, tags, and rules are never touched — falls back to the standard prompt on any doubt.' : 'Add a Claude API key in Settings to enable'}
+            title={getAiKey() ? `${getActiveProvider().label} rewrites each shot’s camera movement language (dolly, arc, push-in…) before generating. Dialogue, tags, and rules are never touched — falls back to the standard prompt on any doubt.` : 'Add a Claude or GLM API key in Settings to enable'}
             style={{
               padding:'6px 12px', borderRadius:9, fontSize:11, fontWeight:600, cursor:'pointer', fontFamily:'inherit',
               background: claudeTune ? 'linear-gradient(135deg,rgba(236,72,153,0.15),rgba(139,92,246,0.15))' : 'var(--bg-tertiary)',
@@ -5623,18 +5621,18 @@ ${shotsWithBeats.join('\n\n')}`
               border: claudeTune ? '1.5px solid rgba(139,92,246,0.4)' : '1.5px solid transparent',
               transition:'all 0.15s',
             }}
-          >✨ Claude camera tuning {claudeTune ? 'ON' : 'OFF'}</button>
+          >✨ {getActiveProvider().label} camera tuning {claudeTune ? 'ON' : 'OFF'}</button>
           {claudeTune && (
             <select
               value={tunerModel}
               onChange={e => { setTunerModel(e.target.value); setTunerModelState(getTunerModel()) }}
-              title={TUNER_MODELS.find(m => m.id === tunerModel)?.pricing || ''}
+              title={getTunerModels().find(m => m.id === tunerModel)?.pricing || ''}
               style={{
                 padding:'5px 8px', borderRadius:8, fontSize:11, fontWeight:600, cursor:'pointer', fontFamily:'inherit',
                 background:'var(--bg-tertiary)', color:'var(--text-secondary)', border:'1.5px solid var(--border)', outline:'none',
               }}
             >
-              {TUNER_MODELS.map(m => <option key={m.id} value={m.id}>{m.label}</option>)}
+              {getTunerModels().map(m => <option key={m.id} value={m.id}>{m.label}</option>)}
             </select>
           )}
           {tuneStatus === 'tuning' && <span style={{fontSize:11,color:'#8B5CF6'}}>tuning camera language…</span>}
