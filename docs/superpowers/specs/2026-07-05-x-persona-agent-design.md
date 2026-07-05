@@ -56,32 +56,71 @@ Non-goals (explicitly out of scope):
 | IG/TikTok later | Aggregator-backed adapters (Ayrshare Launch leading candidate) | They've passed Meta/TikTok app review; webhooks enable interactive loops there too |
 | Dev account | One X developer app, many user tokens | Buffer/Hootsuite model; per-persona dev accounts = spam fingerprint + N bills |
 | Scale flips | Trigger-based, not user-count-based | See §12 flip triggers (SQLite→Postgres, Telegram→in-app) |
+| Repo layout | Monorepo: agent lives in `agent/` subdir of this repo *(amended 2026-07-05; superseded "new repo")* | Shared context (CLAUDE.md, spec, memory) applies to all sessions; soul-sheet schema shared by relative path; `git subtree split -P agent` is the lossless escape hatch |
+| Backend rewrite | Contracts kept language-neutral so a Go+Postgres rewrite stays a staged migration | See §4 rewrite path; expected trigger is operational taste, not performance |
 
 ## 4. Architecture
 
+One repo, three areas (monorepo — amended 2026-07-05, supersedes the
+original "new repo" plan):
+
 ```
-ai-influencer (existing repo, browser, local-first — unchanged philosophy)
+ai-influencer/ (this repo)
 │
-│  1. "Personality" page: src/pages/Personality.jsx, route
-│     /influencers/:id/personality — soul sheet editor, Claude-seeded
-│     from the influencer's visual profile via api/claude.js.
-│     Deliberately NOT inside Influencers.jsx.
-│  2. Export soul sheet (JSON download), manual, once per revision.
-│  3. "Send to persona library" on generated media → POST to agent
-│     ingest endpoint (single bearer token, HTTPS).
+├─ src/ + api/   the React app (browser, local-first — unchanged philosophy)
+│   1. "Personality" page: src/pages/Personality.jsx, route
+│      /influencers/:id/personality — soul sheet editor, Claude-seeded
+│      from the influencer's visual profile via api/claude.js.
+│      Deliberately NOT inside Influencers.jsx.
+│   2. Export soul sheet (JSON download), manual, once per revision.
+│   3. "Send to persona library" on generated media → POST to agent
+│      ingest endpoint (single bearer token, HTTPS).
 │
-▼
-persona-agent (new repo, Node/TypeScript, Hetzner CX22, SQLite WAL)
+├─ shared/soul-sheet/   schema.json (JSON Schema — the source of truth)
+│                       + validation, imported by relative path from
+│                       BOTH the app and the agent
 │
-├─ engine/      soul-sheet loader · memory · content mixer · Claude
-│               drafting + critic · scheduler with jitter · policy check
-├─ adapters/    PlatformAdapter interface; XAdapter now; Instagram/TikTok
-│               adapters later (aggregator-backed); DemoAdapter (dry-run)
-├─ queue/       queue_items table + state machine
-├─ telegram/    approval cards, log channel, command surface
-├─ media/       photo/video library + captions, ingest endpoint
-└─ metrics/     daily_snapshot · post_metrics · action_costs · queue_stats
+└─ agent/   the persona agent — Node/TypeScript, own package.json,
+    │       deployed to Hetzner CX22, SQLite WAL. Vercel ignores it
+    │       (.vercelignore); pre-commit hook runs its tests too.
+    ├─ engine/      soul-sheet loader · memory · content mixer · Claude
+    │               drafting + critic · scheduler with jitter · policy check
+    ├─ adapters/    PlatformAdapter interface; XAdapter now; Instagram/TikTok
+    │               adapters later (aggregator-backed); DemoAdapter (dry-run)
+    ├─ queue/       queue_items table + state machine
+    ├─ telegram/    approval cards, log channel, command surface
+    ├─ media/       photo/video library + captions, ingest endpoint
+    └─ metrics/     daily_snapshot · post_metrics · action_costs · queue_stats
 ```
+
+**Repo-layout rationale.** The monorepo keeps all session context
+(CLAUDE.md, this spec, persistent memory, skills) applying to agent work
+automatically, makes the shared schema a relative import instead of a
+published package, and gives atomic commits across schema + editor + agent
+when the soul sheet evolves. Splitting later is lossless:
+`git subtree split -P agent` extracts `agent/` into its own repo with full
+history — do it only on a §12 flip trigger, never for aesthetics.
+
+**Future backend rewrite path (e.g., Go + Postgres at scale).** Explicitly
+supported by keeping every agent contract language-neutral:
+
+- Soul sheet: `schema.json` is JSON Schema — a Go agent generates structs
+  from the same file the app validates against (go-jsonschema/quicktype);
+  app and agent cannot drift in any language.
+- Ingest endpoint: a small documented HTTP contract, servable from any
+  language.
+- Database: plain SQL types + JSON text columns only — no Node-specific
+  serialization — so SQLite→Postgres is a mechanical data migration and any
+  language can read it. Keep SQL confined to one storage module.
+- Cutover: a rewritten agent runs side-by-side against the migrated
+  Postgres, migrating one persona at a time with `/pause` as rollback. The
+  persona (memory, fans, arcs) is data, not code — it survives untouched.
+
+Honest expectation: the agent is I/O-bound (waiting on X/Claude/Telegram);
+Node comfortably covers the ~150-persona ceiling in §12, so a Go rewrite
+would be an operational-taste decision (static binary, deployment
+simplicity), not a performance rescue. The schema.json discipline is the
+only prepayment worth making today.
 
 Trust boundary: the agent holds X tokens, Claude key, Telegram token in
 env/secret files on Hetzner. The browser app never sees them. App→agent
@@ -126,6 +165,9 @@ agent memory).
 
 Design notes:
 
+- Source of truth is `shared/soul-sheet/schema.json` (JSON Schema). The
+  app's editor and the agent's loader both validate against it; a future
+  non-JS agent generates its types from the same file (§4 rewrite path).
 - `never_sounds_like` + `examplePosts` carry the voice; positive tone
   adjectives alone regress to AI-flavored engagement-speak.
 - No commercial pillar exists in the schema. The mixer cannot schedule promos.
@@ -348,6 +390,13 @@ big:
 - Telegram → in-app queue only on: real onboarding refusal data ("users
   won't install Telegram"), not aesthetics. Telegram bots support per-user
   chats; 100 users can each approve their own persona through one bot.
+- Repo split (`agent/` → own repo via `git subtree split -P agent`) only
+  on: divergent CI/release cadence, open-sourcing the agent, or additional
+  contributors.
+- Backend rewrite (e.g., Go + Postgres) only on operational grounds —
+  performance alone won't trigger it (I/O-bound agent; see §4 rewrite
+  path). When it happens it is a staged, per-persona cutover, not a
+  big-bang.
 
 ## 13. Competitive landscape — ⟳ PERIODIC, not one-time
 
