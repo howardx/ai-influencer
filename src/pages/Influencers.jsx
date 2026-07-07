@@ -6666,6 +6666,25 @@ export default function Influencers() {
               style={{padding:'10px 14px',borderRadius:'var(--radius-sm)',border:'1.5px solid var(--border)',background:'var(--bg)',fontSize:14,color:'var(--text-primary)'}}/>
           </Sec>
 
+          {/* Personality — soul sheet for the X persona agent (own page, own file) */}
+          <Sec>
+            <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',gap:12,flexWrap:'wrap'}}>
+              <div>
+                <div style={{fontSize:11,fontWeight:700,color:'var(--text-secondary)',textTransform:'uppercase',letterSpacing:'0.5px',marginBottom:4}}>Personality</div>
+                <div style={{fontSize:13,color:'var(--text-tertiary)'}}>
+                  {influencer.soulSheet ? 'Soul sheet saved — her X persona posts from this' : 'Give her a soul sheet so an X persona agent can post as her'}
+                </div>
+              </div>
+              <button onClick={()=>navigate(`/influencers/${influencer.id}/personality`)} style={{
+                display:'inline-flex',alignItems:'center',gap:8,padding:'10px 18px',borderRadius:12,
+                fontSize:14,fontWeight:700,border:'none',cursor:'pointer',color:'#fff',
+                background:'linear-gradient(135deg,#EC4899,#8B5CF6)',
+              }}>
+                🪶 {influencer.soulSheet ? 'Edit personality' : 'Create personality'}
+              </button>
+            </div>
+          </Sec>
+
           {/* Detail tabs */}
           <div ref={tabSecRef}><Sec style={{marginBottom:20}}>
             <Tabs active={activeTab} onChange={tab=>{setActiveTab(tab);requestAnimationFrame(()=>tabSecRef.current?.scrollIntoView({behavior:'smooth',block:'start'}))}} ac={ac}/>

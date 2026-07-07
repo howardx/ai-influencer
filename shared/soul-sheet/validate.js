@@ -13,7 +13,7 @@ const WEIGHT_SUM_TOLERANCE = 0.001
 
 /**
  * Validate a parsed soul sheet object.
- * @param {unknown} sheet
+ * @param {any} sheet
  * @returns {{ valid: boolean, errors: string[] }} errors are human-readable,
  *   suitable for direct display in the editor UI or agent startup logs.
  */

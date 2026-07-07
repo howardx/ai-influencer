@@ -11,6 +11,7 @@ import Influencers from './pages/Influencers'
 import Inspiration from './pages/Inspiration'
 import BrandDeals from './pages/BrandDeals'
 import Create from './pages/Create'
+import Personality from './pages/Personality'
 import Settings from './pages/Settings'
 import AuthCallback from './pages/AuthCallback'
 
@@ -69,6 +70,7 @@ export default function App() {
       <Routes>
         <Route path="/" element={<Landing />} />
         <Route path="/influencers" element={<Influencers />} />
+        <Route path="/influencers/:id/personality" element={<Personality />} />
         <Route path="/inspiration" element={<Inspiration />} />
         <Route path="/brand-deals" element={<BrandDeals />} />
         <Route path="/create" element={<Create />} />
