@@ -21,6 +21,7 @@ function draftItem(id: string, overrides: Partial<QueueItem> = {}): QueueItem {
     contextJson: null,
     createdAt: '2026-07-07T10:00:00.000Z',
     expiresAt: '2026-07-07T14:00:00.000Z',
+    scheduledAt: null,
     decidedAt: null,
     decisionReason: null,
     publishedRef: null,

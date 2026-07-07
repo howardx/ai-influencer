@@ -24,6 +24,8 @@ export interface QueueItem extends Tenant {
   contextJson: string | null
   createdAt: string
   expiresAt: string | null
+  /** When this item should publish: an original's mixer slot, or approval time + 2–20 min humanizing delay */
+  scheduledAt: string | null
   decidedAt: string | null
   decisionReason: string | null
   publishedRef: string | null
@@ -91,6 +93,18 @@ const MIGRATIONS: string[] = [
   );
   CREATE INDEX idx_costs_tenant_time ON action_costs(persona_id, owner_id, at);
   `,
+  `
+  ALTER TABLE queue_items ADD COLUMN scheduled_at TEXT;
+
+  CREATE TABLE settings (
+    persona_id TEXT NOT NULL,
+    owner_id   TEXT NOT NULL,
+    key        TEXT NOT NULL,
+    value      TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    PRIMARY KEY (persona_id, owner_id, key)
+  );
+  `,
 ]
 
 export function openDb(path: string): Db {
@@ -119,12 +133,12 @@ export function insertQueueItem(db: Db, item: QueueItem): void {
   db.prepare(
     `INSERT INTO queue_items
        (id, persona_id, owner_id, kind, status, draft_text, context_json,
-        created_at, expires_at, decided_at, decision_reason, published_ref)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+        created_at, expires_at, scheduled_at, decided_at, decision_reason, published_ref)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
   ).run(
     item.id, item.personaId, item.ownerId, item.kind, item.status,
     item.draftText, item.contextJson, item.createdAt, item.expiresAt,
-    item.decidedAt, item.decisionReason, item.publishedRef
+    item.scheduledAt, item.decidedAt, item.decisionReason, item.publishedRef
   )
 }
 
@@ -200,6 +214,7 @@ function rowToQueueItem(row: Record<string, unknown>): QueueItem {
     contextJson: row.context_json as string | null,
     createdAt: row.created_at as string,
     expiresAt: row.expires_at as string | null,
+    scheduledAt: (row.scheduled_at as string | null) ?? null,
     decidedAt: row.decided_at as string | null,
     decisionReason: row.decision_reason as string | null,
     publishedRef: row.published_ref as string | null,
@@ -221,8 +236,10 @@ export interface PostRecord extends Tenant {
 }
 
 export function insertPost(db: Db, post: PostRecord): void {
+  // OR IGNORE: publish flows replay after a crash (adapter-level idempotency
+  // already prevents the double-post; this prevents the double row)
   db.prepare(
-    `INSERT INTO posts
+    `INSERT OR IGNORE INTO posts
        (id, persona_id, owner_id, platform, platform_ref, pillar,
         is_commercial, text, media_json, posted_at)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
@@ -281,6 +298,53 @@ export function setArcState(db: Db, tenant: Tenant, arc: ArcState): void {
        running_bits_json = excluded.running_bits_json,
        updated_at = excluded.updated_at`
   ).run(tenant.personaId, tenant.ownerId, arc.currentArc, JSON.stringify(arc.runningBits), arc.updatedAt)
+}
+
+/** Items whose scheduled time has arrived, in the given status. */
+export function listDueQueueItems(
+  db: Db, tenant: Tenant, status: QueueStatus, nowIso: string
+): QueueItem[] {
+  const rows = db.prepare(
+    `SELECT * FROM queue_items
+     WHERE persona_id = ? AND owner_id = ? AND status = ?
+       AND scheduled_at IS NOT NULL AND scheduled_at <= ?
+     ORDER BY scheduled_at`
+  ).all(tenant.personaId, tenant.ownerId, status, nowIso) as Record<string, unknown>[]
+  return rows.map(rowToQueueItem)
+}
+
+/** Set/replace the scheduled time (e.g. approval + humanizing delay). */
+export function setQueueItemSchedule(db: Db, tenant: Tenant, id: string, scheduledAtIso: string): void {
+  db.prepare(
+    `UPDATE queue_items SET scheduled_at = ?
+     WHERE id = ? AND persona_id = ? AND owner_id = ?`
+  ).run(scheduledAtIso, id, tenant.personaId, tenant.ownerId)
+}
+
+/** Fill in a lazily-drafted original's text at slot time. */
+export function setQueueItemDraftText(db: Db, tenant: Tenant, id: string, text: string): void {
+  db.prepare(
+    `UPDATE queue_items SET draft_text = ?
+     WHERE id = ? AND persona_id = ? AND owner_id = ?`
+  ).run(text, id, tenant.personaId, tenant.ownerId)
+}
+
+// ── settings (per-tenant kv: paused flag, warm-up window, cursors) ───────
+
+export function getSetting(db: Db, tenant: Tenant, key: string): string | null {
+  const row = db.prepare(
+    `SELECT value FROM settings WHERE persona_id = ? AND owner_id = ? AND key = ?`
+  ).get(tenant.personaId, tenant.ownerId, key) as { value: string } | undefined
+  return row?.value ?? null
+}
+
+export function setSetting(db: Db, tenant: Tenant, key: string, value: string, nowIso: string): void {
+  db.prepare(
+    `INSERT INTO settings (persona_id, owner_id, key, value, updated_at)
+     VALUES (?, ?, ?, ?, ?)
+     ON CONFLICT (persona_id, owner_id, key) DO UPDATE SET
+       value = excluded.value, updated_at = excluded.updated_at`
+  ).run(tenant.personaId, tenant.ownerId, key, value, nowIso)
 }
 
 // ── action costs ─────────────────────────────────────────────────────────

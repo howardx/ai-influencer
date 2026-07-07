@@ -17,7 +17,9 @@ export type QueueStatus =
   | 'published'
 
 export const TRANSITIONS: Record<QueueStatus, readonly QueueStatus[]> = {
-  draft: ['pending_approval'],
+  // draft → expired covers a dropped slot (critic rejected every attempt —
+  // silence over slop); it still can never reach published from there.
+  draft: ['pending_approval', 'expired'],
   pending_approval: ['approved', 'rejected', 'expired'],
   approved: ['published'],
   rejected: [],
