@@ -3,6 +3,7 @@ import net from 'node:net'
 import https from 'node:https'
 import { SocksProxyAgent } from 'socks-proxy-agent'
 import { defineConfig } from 'vite'
+import { configDefaults } from 'vitest/config'
 import react from '@vitejs/plugin-react'
 // Reuse the production guard so the dev mirror can't drift from it (an unguarded
 // dev proxy is an open SSRF against the developer's machine/network).
@@ -224,6 +225,11 @@ const glmPlugin = {
 
 export default defineConfig({
   plugins: [react(), searchPlugin, imgProxyPlugin, claudePlugin, glmPlugin],
+  test: {
+    // agent/ is its own workspace with its own vitest suite (run by the
+    // pre-commit hook separately) — keep its TS tests out of the root run
+    exclude: [...configDefaults.exclude, 'agent/**'],
+  },
   server: {
     proxy: {
       '/api/hf': {

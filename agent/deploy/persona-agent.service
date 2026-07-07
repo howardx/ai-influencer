@@ -1,0 +1,34 @@
+# systemd unit for the persona agent (Hetzner CX22).
+#
+# Install:
+#   sudo cp deploy/persona-agent.service /etc/systemd/system/
+#   sudo mkdir -p /etc/persona-agent && sudo chmod 700 /etc/persona-agent
+#   sudo $EDITOR /etc/persona-agent/env        # secrets live ONLY here (see .env.example)
+#   sudo systemctl enable --now persona-agent
+#
+# Assumes the repo is checked out at /opt/ai-influencer and `npm install`
+# has been run inside agent/. Adjust User/paths to the server's layout.
+
+[Unit]
+Description=AI influencer persona agent
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=agent
+WorkingDirectory=/opt/ai-influencer/agent
+EnvironmentFile=/etc/persona-agent/env
+ExecStart=/usr/bin/npm run start
+Restart=always
+RestartSec=5
+
+# Hardening: the agent only ever writes under its own data directory
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/opt/ai-influencer/agent/data
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

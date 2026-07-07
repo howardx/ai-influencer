@@ -1,0 +1,3 @@
+# The persona agent deploys to Hetzner via systemd, never to Vercel
+# (spec §4 monorepo layout). shared/ stays: the app imports shared/soul-sheet.
+agent/

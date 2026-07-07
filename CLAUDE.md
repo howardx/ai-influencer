@@ -34,6 +34,33 @@ account (OAuth, PKCE).
 | `api/hfproxy.js` | Edge function that proxies all Higgsfield MCP traffic and forwards SSE streams. `/api/hf/*` is routed here by the `vercel.json` rewrite (sub-path passed as `__hfpath`); it enforces the path allowlist and rate limiting |
 | `api/claude.js` | Anthropic API proxy — caller supplies their own `x-api-key` |
 
+## Persona agent (`agent/`) and `shared/`
+
+`agent/` is the X persona agent — a separate Node/TypeScript workspace in
+this monorepo (own `package.json`, own vitest suite; the pre-commit hook
+runs it when `agent/node_modules` exists). It runs personas' X presence:
+drafting via Claude, Telegram approval queue, posting through the X API.
+Design spec: `docs/superpowers/specs/2026-07-05-x-persona-agent-design.md`.
+Execution is tracked in Linear (project "X Persona Agent", HEX-18..34).
+
+- **Deploy target is Hetzner via systemd** (`agent/deploy/persona-agent.service`),
+  never Vercel — `.vercelignore` excludes it.
+- **Local dev needs no secrets:** `cd agent && npm install && npm run smoke`
+  loads the Kayla example soul sheet, opens a WAL SQLite DB under
+  `agent/data/`, and dry-runs a publish through DemoAdapter.
+- `shared/soul-sheet/schema.json` is the language-neutral source of truth
+  for soul sheets; app editor and agent loader both validate through
+  `shared/soul-sheet/validate.js`. Schema changes must keep it valid JSON
+  Schema (a future Go agent generates types from it).
+- **DB discipline:** all SQL lives in `agent/src/storage/db.ts` only — plain
+  SQL types + JSON text columns, every table keyed by `persona_id` +
+  `owner_id` (makes SQLite→Postgres and multi-tenant SaaS mechanical).
+- **Compliance is structural:** `PlatformAdapter` has no like/follow/DM
+  methods and the pillar enum has no commercial pillar. Don't add them.
+- Secrets (X tokens, Claude key, Telegram token) live only in
+  `/etc/persona-agent/env` on the server or a local gitignored `agent/.env`
+  (see `agent/.env.example`) — never in the browser app or the repo.
+
 ## Deeper docs (read when relevant, not preloaded)
 
 - `docs/gpt-image-2-engine.md` — prompt engine for photorealistic

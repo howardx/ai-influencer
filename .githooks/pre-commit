@@ -21,3 +21,28 @@ if [ $status -ne 0 ]; then
   echo "Fix the failures, or bypass once with 'git commit --no-verify'."
   exit $status
 fi
+
+# agent/ is its own workspace (excluded from the root vitest run). Skip when
+# its deps aren't installed — fresh clones that never touch the agent
+# shouldn't be blocked from committing app changes.
+if [ -d agent/node_modules ]; then
+  echo "pre-commit: agent typecheck..."
+  (cd agent && npx tsc --noEmit)
+  status=$?
+  if [ $status -ne 0 ]; then
+    echo ""
+    echo "pre-commit: agent typecheck failed — commit blocked."
+    exit $status
+  fi
+
+  echo "pre-commit: agent tests..."
+  (cd agent && npx vitest run)
+  status=$?
+  if [ $status -ne 0 ]; then
+    echo ""
+    echo "pre-commit: agent tests failed — commit blocked."
+    exit $status
+  fi
+else
+  echo "pre-commit: agent/node_modules missing — skipping agent suite (run 'npm install' in agent/)"
+fi
