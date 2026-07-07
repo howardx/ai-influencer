@@ -19,6 +19,7 @@ export interface AgentConfig {
     accessToken: string
     refreshToken?: string
     clientId?: string
+    clientSecret?: string
   }
 }
 
@@ -33,6 +34,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AgentConfig {
           accessToken: env.X_ACCESS_TOKEN,
           refreshToken: env.X_REFRESH_TOKEN || undefined,
           clientId: env.X_CLIENT_ID || undefined,
+          clientSecret: env.X_CLIENT_SECRET || undefined,
         }
       : undefined,
   }

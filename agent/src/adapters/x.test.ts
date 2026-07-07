@@ -102,6 +102,21 @@ describe('XAdapter', () => {
     expect(String(refreshCall?.init.body)).toContain('grant_type=refresh_token')
   })
 
+  it('Basic-auths the refresh when a client secret is set (confidential Web App)', async () => {
+    const { x, calls } = adapter(
+      [
+        { match: u => u.endsWith('/2/tweets'), status: 401, body: {} },
+        { match: u => u.endsWith('/2/oauth2/token'), status: 200, body: { access_token: 'token-2' } },
+        { match: (u, i) => u.endsWith('/2/tweets') && (i.headers as Record<string, string>).authorization === 'Bearer token-2', status: 201, body: { data: { id: '8' } } },
+      ],
+      { clientSecret: 'shhh' }
+    )
+    await x.publishPost({ text: 'confidential', idempotencyKey: 'k' })
+    const refreshCall = calls.find(c => c.url.endsWith('/2/oauth2/token'))
+    const auth = (refreshCall?.init.headers as Record<string, string>).authorization
+    expect(auth).toBe('Basic ' + Buffer.from('client-1:shhh').toString('base64'))
+  })
+
   it('surfaces 429 as XRateLimitError with the reset time (engine pauses the queue)', async () => {
     const reset = Math.floor(Date.parse('2026-07-07T12:34:56Z') / 1000)
     const { x } = adapter([

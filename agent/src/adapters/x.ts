@@ -46,6 +46,8 @@ export interface IdempotencyStore {
 
 export interface XAdapterOptions {
   clientId: string
+  /** Required for confidential (Web App) clients — token refresh must Basic-auth. */
+  clientSecret?: string
   accessToken: string
   refreshToken?: string
   /** Called whenever tokens rotate — persist them or the next restart is logged out. */
@@ -69,6 +71,7 @@ export class XAdapter implements PlatformAdapter {
   private accessToken: string
   private refreshToken?: string
   private readonly clientId: string
+  private readonly clientSecret?: string
   private readonly onTokensRefreshed?: XAdapterOptions['onTokensRefreshed']
   private readonly idempotency: IdempotencyStore
   private readonly fetch: typeof fetch
@@ -80,6 +83,7 @@ export class XAdapter implements PlatformAdapter {
 
   constructor(opts: XAdapterOptions) {
     this.clientId = opts.clientId
+    this.clientSecret = opts.clientSecret
     this.accessToken = opts.accessToken
     this.refreshToken = opts.refreshToken
     this.onTokensRefreshed = opts.onTokensRefreshed
@@ -291,9 +295,16 @@ export class XAdapter implements PlatformAdapter {
   /** OAuth 2.0 refresh (rotating tokens). Single-flight so parallel 401s refresh once. */
   private async refreshTokens(): Promise<void> {
     this.refreshInFlight ??= (async () => {
+      const headers: Record<string, string> = { 'content-type': 'application/x-www-form-urlencoded' }
+      // Confidential (Web App) clients must Basic-auth the refresh; public
+      // clients send client_id in the body and rely on PKCE-issued tokens.
+      if (this.clientSecret) {
+        headers.authorization =
+          'Basic ' + Buffer.from(`${this.clientId}:${this.clientSecret}`).toString('base64')
+      }
       const res = await this.fetch(`${this.apiBase}/2/oauth2/token`, {
         method: 'POST',
-        headers: { 'content-type': 'application/x-www-form-urlencoded' },
+        headers,
         body: new URLSearchParams({
           grant_type: 'refresh_token',
           refresh_token: this.refreshToken as string,
