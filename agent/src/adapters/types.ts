@@ -42,7 +42,12 @@ export interface MentionPage {
 
 export interface PlatformAdapter {
   readonly platform: string
-  publishPost(p: { text: string; mediaPaths?: string[]; idempotencyKey: string }): Promise<PostRef>
+  /**
+   * `allowLink` is a cost guardrail (spec §6/§8): links in originals cost
+   * $0.20/post vs $0.015 and get algorithmically throttled, so adapters
+   * reject URLs unless the caller explicitly opts in (the /commercial path).
+   */
+  publishPost(p: { text: string; mediaPaths?: string[]; idempotencyKey: string; allowLink?: boolean }): Promise<PostRef>
   publishReply(p: { text: string; inReplyTo: string; idempotencyKey: string }): Promise<PostRef>
   deletePost(ref: PostRef): Promise<void>
   getMentions(since: Cursor): Promise<MentionPage>
