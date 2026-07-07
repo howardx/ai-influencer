@@ -47,6 +47,25 @@ describe('prompt builders', () => {
   })
 })
 
+describe('parseVerdict', () => {
+  it('accepts decorated PASS verdicts', async () => {
+    const { parseVerdict } = await import('./drafting')
+    expect(parseVerdict('PASS').pass).toBe(true)
+    expect(parseVerdict('**PASS**').pass).toBe(true)
+    expect(parseVerdict('  ✅ Pass — reads human').pass).toBe(true)
+  })
+
+  it('extracts reasons from decorated or free-form rejections', async () => {
+    const { parseVerdict } = await import('./drafting')
+    expect(parseVerdict('REJECT: motivational-poster energy')).toEqual({ pass: false, reason: 'motivational-poster energy' })
+    expect(parseVerdict('**REJECT** — sounds corporate').reason).toBe('sounds corporate')
+    expect(parseVerdict('Rejected: engagement bait').reason).toBe('engagement bait')
+    // free-form prose that never says REJECT still yields a usable reason
+    expect(parseVerdict('This reads like an ad, not a person.').reason).toBe('This reads like an ad, not a person.')
+    expect(parseVerdict('REJECT').reason).toBe('critic gave no reason')
+  })
+})
+
 describe('draftWithCritic', () => {
   it('returns the draft when the critic passes', async () => {
     const claude = fakeClaude(['squat day. humbled, as is tradition', 'PASS'])

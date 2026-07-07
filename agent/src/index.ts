@@ -9,6 +9,7 @@
 // + TELEGRAM_CHAT_ID enable the approval queue; persona tokens come from
 // data/accounts.json (tools/x-oauth.ts).
 import { join } from 'node:path'
+import { connect } from 'node:net'
 import { loadConfig } from './config'
 import { loadSoulSheet } from './engine/soul'
 import { openDb, getArcState, setArcState, getSetting, setSetting } from './storage/db'
@@ -21,6 +22,27 @@ import { loadAccounts, resolveAccount, updateTokens } from './accounts'
 import type { PlatformAdapter } from './adapters/types'
 
 const TICK_MS = 30_000
+
+// Same dev-machine reality vite.config.js handles: Anthropic geo-blocks some
+// egress IPs; the owner's `us-on` SOCKS tunnel fixes browsers but Node
+// ignores system proxies. Probe the tunnel and route Claude through it when
+// up. AGENT_SOCKS_PROXY=<url> forces, =direct disables, unset auto-probes.
+function socksTunnelUp(host: string, port: number): Promise<boolean> {
+  return new Promise(resolve => {
+    const sock = connect({ host, port, timeout: 300 })
+    const done = (up: boolean) => { sock.destroy(); resolve(up) }
+    sock.once('connect', () => done(true))
+    sock.once('error', () => done(false))
+    sock.once('timeout', () => done(false))
+  })
+}
+
+async function resolveClaudeProxy(): Promise<string | undefined> {
+  const env = process.env.AGENT_SOCKS_PROXY
+  if (env === 'direct') return undefined
+  if (env) return env
+  return (await socksTunnelUp('127.0.0.1', 10808)) ? 'socks5h://127.0.0.1:10808' : undefined
+}
 
 async function main(): Promise<void> {
   const config = loadConfig()
@@ -67,13 +89,22 @@ async function main(): Promise<void> {
     console.log(`adapter: X as @${stored.username}`)
   } else {
     adapter = new DemoAdapter({ log: line => console.log(line) })
-    console.log('adapter: demo (dry-run — set X_CLIENT_ID + authorize a persona to go live)')
+    const why = process.env.DEMO_MODE ? 'DEMO_MODE set'
+      : !config.x?.clientId ? 'X_CLIENT_ID missing from env'
+      : 'no authorized persona in data/accounts.json (run tools/x-oauth.ts)'
+    console.log(`adapter: demo (dry-run — ${why})`)
   }
 
-  const claude = config.anthropicApiKey
-    ? createClaudeClient({ apiKey: config.anthropicApiKey, model: process.env.ANTHROPIC_MODEL })
-    : null
-  if (!claude) console.log('no ANTHROPIC_API_KEY — scheduled slots will drop instead of drafting')
+  let claude = null
+  if (config.anthropicApiKey) {
+    const socksProxyUrl = await resolveClaudeProxy()
+    if (socksProxyUrl) console.log(`claude egress via SOCKS tunnel ${socksProxyUrl} (geo-block workaround)`)
+    claude = createClaudeClient({
+      apiKey: config.anthropicApiKey, model: process.env.ANTHROPIC_MODEL, socksProxyUrl,
+    })
+  } else {
+    console.log('no ANTHROPIC_API_KEY — scheduled slots will drop instead of drafting')
+  }
 
   const loop = new AgentLoop({
     db, sheet, adapter, claude,
@@ -95,8 +126,28 @@ async function main(): Promise<void> {
       },
       log: line => console.log(line),
     })
-    loop.attachTelegram(bot)
-    await bot.sendNote(`🤖 agent up for ${sheet.identity.name} on ${adapter.platform} — /status /pause /resume`).catch(e =>
+    loop.attachTelegram(bot, { externalPolling: true })
+    // Dedicated long-poll loop: button taps and commands answer in
+    // milliseconds instead of waiting for the 30s engine tick (callback
+    // queries expire in seconds). Errors back off briefly and retry.
+    const pollTelegram = async () => {
+      try {
+        await bot.poll(25)
+        setTimeout(pollTelegram, 250)
+      } catch (e) {
+        console.log(`telegram poll error: ${(e as Error).message}`)
+        setTimeout(pollTelegram, 5_000)
+      }
+    }
+    setTimeout(pollTelegram, 250)
+    await bot.sendNote([
+      `🤖 agent up for ${sheet.identity.name} on ${adapter.platform}`,
+      '/status — state & queue',
+      '/pause — kill switch (halts ALL publishing)',
+      '/resume — resume publishing',
+      '/post <text> — publish exactly this text now',
+      '/draft <hint> — she drafts it in-voice → approval card',
+    ].join('\n')).catch(e =>
       console.log(`telegram hello failed: ${e.message}`))
     console.log('telegram: connected')
   } else {

@@ -19,7 +19,20 @@ export interface DraftResult {
   text: string | null
   /** Why the slot was dropped (all attempts rejected) — for the log channel */
   droppedBecause?: string
+  /** The final rejected draft — surfaced so drops are debuggable, not mysterious */
+  lastDraft?: string
   attempts: number
+}
+
+/**
+ * Models decorate verdicts ("**PASS**", "Rejected — too corporate", …).
+ * Normalize before judging: strip leading non-letters, uppercase.
+ */
+export function parseVerdict(raw: string): { pass: boolean; reason: string } {
+  const normalized = raw.trim().replace(/^[^a-zA-Z]+/, '')
+  const pass = normalized.toUpperCase().startsWith('PASS')
+  const reason = pass ? '' : (normalized.replace(/^REJECT(?:ED)?[^a-zA-Z]*/i, '').trim() || 'critic gave no reason')
+  return { pass, reason }
 }
 
 const MAX_ATTEMPTS = 3 // 1 draft + 2 regenerations
@@ -99,9 +112,9 @@ export async function draftReplyWithCritic(
   const policy = checkPolicy(draft, sheet, { kind: 'reply', recentTexts: ctx.recentTextsForDedup })
   if (!policy.ok) return { text: null, droppedBecause: policy.violations.join('; '), attempts: 1 }
 
-  const verdict = (await claude.complete({ user: buildCriticUser(sheet, draft), maxTokens: 100 })).trim()
-  if (!verdict.toUpperCase().startsWith('PASS')) {
-    return { text: null, droppedBecause: verdict.replace(/^REJECT:?\s*/i, ''), attempts: 1 }
+  const verdict = parseVerdict(await claude.complete({ user: buildCriticUser(sheet, draft), maxTokens: 100 }))
+  if (!verdict.pass) {
+    return { text: null, droppedBecause: verdict.reason, lastDraft: draft, attempts: 1 }
   }
   return { text: draft, attempts: 1 }
 }
@@ -113,10 +126,12 @@ export async function draftWithCritic(
   pillar: ContentPillar,
   ctx: DraftContext,
   kind: 'original' | 'reply' | 'trend_take' = 'original',
-  hint?: string
+  hint?: string,
+  log: (line: string) => void = () => {}
 ): Promise<DraftResult> {
   const system = buildDraftSystem(sheet)
   let lastReason = ''
+  let lastDraft = ''
 
   for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
     const retryHint = lastReason ? `${hint ? hint + '. ' : ''}Previous attempt rejected: ${lastReason}` : hint
@@ -125,22 +140,27 @@ export async function draftWithCritic(
       user: buildDraftUser(pillar, ctx, retryHint),
       maxTokens: 300,
     })).replace(/^["']|["']$/g, '').trim()
+    lastDraft = draft
+    log(`draft attempt ${attempt} (${pillar.name}): ${draft}`)
 
     const policy = checkPolicy(draft, sheet, { kind, recentTexts: ctx.recentTextsForDedup })
     if (!policy.ok) {
       lastReason = policy.violations.join('; ')
+      log(`  → policy: ${lastReason}`)
       continue
     }
 
-    const verdict = (await claude.complete({
+    const verdict = parseVerdict(await claude.complete({
       user: buildCriticUser(sheet, draft),
       maxTokens: 100,
-    })).trim()
-    if (verdict.toUpperCase().startsWith('PASS')) {
+    }))
+    if (verdict.pass) {
+      log(`  → critic: PASS`)
       return { text: draft, attempts: attempt }
     }
-    lastReason = verdict.replace(/^REJECT:?\s*/i, '') || 'critic rejected'
+    lastReason = verdict.reason
+    log(`  → critic: REJECT — ${lastReason}`)
   }
 
-  return { text: null, droppedBecause: lastReason, attempts: MAX_ATTEMPTS }
+  return { text: null, droppedBecause: lastReason, lastDraft, attempts: MAX_ATTEMPTS }
 }

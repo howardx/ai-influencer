@@ -15,10 +15,13 @@ export interface AgentConfig {
   /** Present only when the corresponding integration is configured. */
   telegramBotToken?: string
   anthropicApiKey?: string
+  /**
+   * App-level X credentials only. Per-persona access/refresh tokens live in
+   * the accounts store (data/accounts.json), NOT in env — tokens rotate and
+   * env is static.
+   */
   x?: {
-    accessToken: string
-    refreshToken?: string
-    clientId?: string
+    clientId: string
     clientSecret?: string
   }
 }
@@ -29,11 +32,9 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AgentConfig {
     soulSheetPath: env.SOUL_SHEET || '../shared/soul-sheet/kayla.example.json',
     telegramBotToken: env.TELEGRAM_BOT_TOKEN || undefined,
     anthropicApiKey: env.ANTHROPIC_API_KEY || undefined,
-    x: env.X_ACCESS_TOKEN
+    x: env.X_CLIENT_ID
       ? {
-          accessToken: env.X_ACCESS_TOKEN,
-          refreshToken: env.X_REFRESH_TOKEN || undefined,
-          clientId: env.X_CLIENT_ID || undefined,
+          clientId: env.X_CLIENT_ID,
           clientSecret: env.X_CLIENT_SECRET || undefined,
         }
       : undefined,

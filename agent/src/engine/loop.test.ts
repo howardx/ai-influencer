@@ -165,6 +165,44 @@ describe('AgentLoop end-to-end (DemoAdapter)', () => {
     expect(listQueueItems(db, T, 'expired')).toHaveLength(planned)
   })
 
+  it('/post publishes the owner\'s exact words instantly — no Claude, policy still applies', async () => {
+    const h = makeHarness(dir, { claude: null }); db = h.db // no Claude needed for verbatim
+    h.pushUpdate({ update_id: 1, message: { chat: { id: 42 }, text: '/post gym was empty today. suspicious' } })
+    await h.loop.tick()
+    expect(h.demo.published.some(p => p.text === 'gym was empty today. suspicious')).toBe(true)
+    expect(listRecentPosts(db, T, 10).some(p => p.text === 'gym was empty today. suspicious')).toBe(true)
+
+    // policy floor holds even for the owner: link in an original refused
+    h.pushUpdate({ update_id: 2, message: { chat: { id: 42 }, text: '/post check https://spam.example' } })
+    await h.loop.tick()
+    expect(h.demo.published.some(p => p.text.includes('spam.example'))).toBe(false)
+    expect(h.tgSent.some(s => String(s.params.text ?? '').includes('refused by policy'))).toBe(true)
+
+    // and it refuses while paused
+    h.pushUpdate({ update_id: 3, message: { chat: { id: 42 }, text: '/pause' } })
+    h.pushUpdate({ update_id: 4, message: { chat: { id: 42 }, text: '/post one more' } })
+    const before = h.demo.published.length
+    await h.loop.tick()
+    expect(h.demo.published.length).toBe(before)
+    expect(h.tgSent.some(s => String(s.params.text ?? '').includes('paused — /resume first'))).toBe(true)
+  })
+
+  it('/draft queues an approval card; ✅ publishes after the humanizing delay', async () => {
+    const h = makeHarness(dir); db = h.db
+    h.pushUpdate({ update_id: 1, message: { chat: { id: 42 }, text: '/draft about rest days' } })
+    await h.loop.tick()
+    expect(h.demo.published).toHaveLength(0) // drafted, NOT published
+    const item = listQueueItems(db, T, 'pending_approval').find(i => i.kind === 'original')!
+    expect(item.draftText).toBe('leg day receipts: the stairs won again')
+    expect(h.tgSent.some(s => String(s.params.text ?? '').includes('your hint: “about rest days”'))).toBe(true)
+
+    h.pushUpdate({ update_id: 2, callback_query: { id: 'cb', data: `approve:${item.id}` } })
+    await h.loop.tick()
+    h.clock.advance(21 * 60_000)
+    await h.loop.tick()
+    expect(h.demo.published.some(p => p.text === item.draftText)).toBe(true)
+  })
+
   it('warm-up mode: no replies drafted even when mentions arrive', async () => {
     const h = makeHarness(dir); db = h.db
     setSetting(db, T, 'warmup_until', '2026-08-01T00:00:00.000Z', new Date(h.clock.now()).toISOString())

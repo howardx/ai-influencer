@@ -3,17 +3,19 @@
 //   draft+publish due originals → poll mentions → publish approved items.
 // All clocks and randomness are injected; the daemon calls tick() on an
 // interval, tests call it with a fake clock.
+import { randomUUID } from 'node:crypto'
 import type { Db, Tenant } from '../storage/db'
 import {
   expireOverdueQueueItems, listDueQueueItems, listRecentPosts, getArcState,
   transitionQueueItem, setQueueItemDraftText, setQueueItemSchedule,
-  getSetting, setSetting, recordActionCost,
+  getSetting, setSetting, recordActionCost, insertPost,
 } from '../storage/db'
 import type { SoulSheet } from './soul'
 import type { ClaudeClient } from './claude'
-import { planDay, type Rng } from './mixer'
+import { planDay, pickPillars, type Rng } from './mixer'
 import { localDayStartMs, localDateString } from './time'
 import { draftWithCritic, draftReplyWithCritic } from './drafting'
+import { checkPolicy } from './policy'
 import {
   enqueuePlannedOriginal, enqueueForApproval, approveItem, rejectItem,
   publishDueApproved, isPaused, setPaused,
@@ -39,14 +41,21 @@ export class AgentLoop {
   private readonly d: LoopDeps
   readonly tenant: Tenant
   private telegram: TelegramBot | null = null
+  private pollTelegramInTick = true
 
   constructor(deps: LoopDeps) {
     this.d = deps
     this.tenant = { personaId: deps.sheet.personaId, ownerId: deps.sheet.ownerId }
   }
 
-  attachTelegram(bot: TelegramBot): void {
+  /**
+   * externalPolling: the daemon runs a dedicated long-poll loop (button taps
+   * must be answered within seconds — a 30s tick is too slow), so the tick
+   * must NOT also call getUpdates: two concurrent pollers make Telegram 409.
+   */
+  attachTelegram(bot: TelegramBot, opts: { externalPolling?: boolean } = {}): void {
     this.telegram = bot
+    this.pollTelegramInTick = !opts.externalPolling
   }
 
   /** Handlers for the Telegram buttons/commands — wire into TelegramBot. */
@@ -85,7 +94,75 @@ export class AgentLoop {
           `approved awaiting publish: ${pending}`,
         ].filter(Boolean).join('\n')
       },
+      onPostVerbatim: text => this.postVerbatim(text),
+      onDraft: hint => this.draftToCard(hint),
     }
+  }
+
+  /**
+   * /post <text> — publish EXACTLY the owner's words, right now. No Claude:
+   * the owner IS the author. The mechanical policy floor still applies
+   * (banned topics, links, length) because it protects the account, not the voice.
+   */
+  private async postVerbatim(text: string): Promise<string> {
+    const { db, sheet, adapter, log } = this.d
+    if (isPaused(db, this.tenant)) return '⏸ paused — /resume first'
+
+    const policy = checkPolicy(text, sheet, {
+      kind: 'original',
+      recentTexts: listRecentPosts(db, this.tenant, 50).map(p => p.text),
+    })
+    if (!policy.ok) return `refused by policy: ${policy.violations.join('; ')}`
+
+    const id = randomUUID()
+    const ref = await adapter.publishPost({ text, idempotencyKey: id })
+    insertPost(db, {
+      id, ...this.tenant, platform: ref.platform, platformRef: ref.id,
+      pillar: null, isCommercial: false,
+      text, mediaJson: null, postedAt: this.nowIso(),
+    })
+    recordActionCost(db, this.tenant, 'x.publish', 0.015, this.nowIso())
+    log(`/post published verbatim: ${text}`)
+    return `📤 posted: ${text}${ref.url ? `\n${ref.url}` : ''}`
+  }
+
+  /**
+   * /draft [hint] — Claude drafts in her voice (critic + policy apply), then
+   * an approval card arrives: ✅ publishes after the humanizing delay, ❌ or
+   * 24h of silence drops it.
+   */
+  private async draftToCard(hint: string): Promise<string> {
+    const { db, sheet, claude, rng, log } = this.d
+    if (isPaused(db, this.tenant)) return '⏸ paused — /resume first'
+    if (!claude) return 'no ANTHROPIC_API_KEY configured — cannot draft'
+
+    const { pillars } = pickPillars(sheet, 1, rng, false)
+    const pillar = pillars[0]
+    const ctx = {
+      recentPosts: listRecentPosts(db, this.tenant, 15).map(p => p.text),
+      arc: getArcState(db, this.tenant),
+      recentTextsForDedup: listRecentPosts(db, this.tenant, 50).map(p => p.text),
+    }
+    const result = await draftWithCritic(claude, sheet, pillar, ctx, 'original', hint || undefined, log)
+    recordActionCost(db, this.tenant, 'claude.draft', 0, this.nowIso())
+    if (!result.text) {
+      return `dropped after ${result.attempts} attempt(s): ${result.droppedBecause}` +
+        (result.lastDraft ? `\n\nlast rejected draft:\n“${result.lastDraft}”` : '')
+    }
+
+    const item = enqueueForApproval(db, this.tenant, {
+      kind: 'original',
+      draftText: result.text,
+      contextJson: JSON.stringify({ pillar: pillar.name, hint: hint || undefined }),
+      nowIso: this.nowIso(),
+    })
+    log(`/draft queued (${pillar.name}): ${result.text}`)
+    if (this.telegram) {
+      await this.telegram
+        .sendApprovalCard(item, hint ? `your hint: “${hint}”` : `pillar: ${pillar.name}`, this.d.now())
+        .catch(e => log(`card send failed: ${(e as Error).message}`))
+    }
+    return `📝 drafted — approve on the card above`
   }
 
   private nowIso(): string {
@@ -105,7 +182,8 @@ export class AgentLoop {
     if (expired > 0) log(`expired ${expired} overdue queue item(s) — silence is safe`)
 
     // Telegram first: /pause must work even when everything else is on fire
-    if (this.telegram) {
+    // (skipped when the daemon's dedicated poller owns getUpdates)
+    if (this.telegram && this.pollTelegramInTick) {
       await this.telegram.poll().catch(e => log(`telegram poll failed: ${(e as Error).message}`))
     }
 
@@ -173,7 +251,7 @@ export class AgentLoop {
     for (const item of due) {
       const pillarName = item.contextJson ? (JSON.parse(item.contextJson) as { pillar?: string }).pillar : undefined
       const pillar = sheet.contentPillars.find(p => p.name === pillarName) ?? sheet.contentPillars[0]
-      const result = await draftWithCritic(claude, sheet, pillar, ctx)
+      const result = await draftWithCritic(claude, sheet, pillar, ctx, 'original', undefined, log)
       recordActionCost(db, this.tenant, 'claude.draft', 0, this.nowIso())
 
       if (!result.text) {

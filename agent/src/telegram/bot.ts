@@ -15,6 +15,10 @@ export interface TelegramHandlers {
   onPause(): Promise<string>
   onResume(): Promise<string>
   onStatus(): Promise<string>
+  /** /post <text> — publish EXACTLY this text now (no Claude; policy check only) */
+  onPostVerbatim(text: string): Promise<string>
+  /** /draft [hint] — Claude drafts in-voice from the hint → approval card */
+  onDraft(hint: string): Promise<string>
 }
 
 export interface TelegramBotOptions {
@@ -32,7 +36,7 @@ export interface TelegramBotOptions {
 interface TgUpdate {
   update_id: number
   message?: { chat: { id: number }; text?: string }
-  callback_query?: { id: string; data?: string; message?: { chat: { id: number } } }
+  callback_query?: { id: string; data?: string; message?: { chat: { id: number }; message_id: number } }
 }
 
 export class TelegramBot {
@@ -115,20 +119,39 @@ export class TelegramBot {
 
     if (update.callback_query) {
       const q = update.callback_query
+      // Ack FIRST and tolerate failure: callback queries expire within
+      // seconds, and a decision must never look broken because a toast aged out
+      await this.call('answerCallbackQuery', { callback_query_id: q.id }).catch(() => {})
+      // Strip the buttons so a second tap on the same card can't happen
+      if (q.message) {
+        await this.call('editMessageReplyMarkup', {
+          chat_id: q.message.chat.id,
+          message_id: q.message.message_id,
+          reply_markup: { inline_keyboard: [] },
+        }).catch(() => {})
+      }
       const [action, payload] = (q.data ?? '').split(/:(.*)/s)
       let feedback = 'unknown action'
       if (action === 'approve') feedback = await handlers.onApprove(payload)
       else if (action === 'reject') feedback = await handlers.onReject(payload)
       else if (action === 'delete') feedback = await handlers.onDelete(payload)
-      await this.call('answerCallbackQuery', { callback_query_id: q.id, text: feedback })
+      // Durable feedback as a chat message, not a fragile toast
+      await this.sendNote(feedback)
       return
     }
 
     const text = update.message?.text?.trim()
     if (!text || String(update.message?.chat.id) !== String(this.opts.chatId)) return
     const command = text.split(/[\s@]/)[0]
+    const rest = text.includes(' ') ? text.slice(text.indexOf(' ') + 1).trim() : ''
     if (command === '/pause') await this.sendNote(await handlers.onPause())
     else if (command === '/resume') await this.sendNote(await handlers.onResume())
     else if (command === '/status') await this.sendNote(await handlers.onStatus())
+    else if (command === '/post') {
+      await this.sendNote(rest
+        ? await handlers.onPostVerbatim(rest)
+        : 'usage: /post <exact text to publish> — or /draft [hint] to have her write it')
+    }
+    else if (command === '/draft') await this.sendNote(await handlers.onDraft(rest))
   }
 }

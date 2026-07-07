@@ -48,6 +48,12 @@ Execution is tracked in Linear (project "X Persona Agent", HEX-18..34).
 - **Local dev needs no secrets:** `cd agent && npm install && npm run smoke`
   loads the Kayla example soul sheet, opens a WAL SQLite DB under
   `agent/data/`, and dry-runs a publish through DemoAdapter.
+- **Full runbook is `agent/README.md`** — Telegram bot setup, X OAuth
+  (`tools/x-oauth.ts` → `data/accounts.json`), daemon modes
+  (`DEMO_MODE=1`, `--once`), Telegram commands (`/status /pause /resume`,
+  `/post <exact text>`, `/draft <hint>` → approval card), headless-server
+  OAuth via SSH port forward. Never `rm -rf agent/data/` — the OAuth
+  tokens live there next to the disposable `.db` files.
 - `shared/soul-sheet/schema.json` is the language-neutral source of truth
   for soul sheets; app editor and agent loader both validate through
   `shared/soul-sheet/validate.js`. Schema changes must keep it valid JSON
