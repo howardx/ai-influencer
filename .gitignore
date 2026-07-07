@@ -7,8 +7,9 @@ dist
 # Playwright MCP outputs (screenshots, snapshots, logs)
 .playwright-mcp/
 
-# Persona agent: local databases, media library, secrets
+# Persona agent: local databases, media library, secrets, rehearsal state
 agent/data/
+agent/data-demo/
 agent/.env
 
 

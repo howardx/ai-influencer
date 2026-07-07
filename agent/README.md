@@ -76,6 +76,13 @@ npx tsx --env-file=.env src/index.ts               # live (needs X creds + perso
 npx tsx --env-file=.env src/index.ts --once        # single tick, then exit
 ```
 
+Demo rehearsals: isolate the state so stage props never enter the persona's
+real memory, and stop the live daemon first (one bot token = one poller):
+
+```bash
+AGENT_DATA_DIR=./data-demo DEMO_MODE=1 npx tsx --env-file=.env src/index.ts
+```
+
 On start you get a "🤖 agent up" Telegram message. New accounts run in
 **warm-up mode** for 14 days: 1–2 posts/day, no replies.
 
