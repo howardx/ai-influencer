@@ -203,6 +203,37 @@ describe('AgentLoop end-to-end (DemoAdapter)', () => {
     expect(h.demo.published.some(p => p.text === item.draftText)).toBe(true)
   })
 
+  it('Claude outage: slot backs off 15 min, drops after 3 failures, tick never crashes', async () => {
+    const flakyClaude = { complete: async () => { throw new Error('Claude upstream timeout') } }
+    const h = makeHarness(dir, { claude: flakyClaude }); db = h.db
+    await h.loop.tick() // plans the day
+    const planned = listQueueItems(db, T, 'draft')
+    const firstSlotAt = Math.min(...planned.map(i => Date.parse(i.scheduledAt!)))
+
+    // failure 1: due slot errors → backed off, still a draft, NOT retried next tick
+    h.clock.advance(firstSlotAt - h.clock.now() + 1000)
+    await h.loop.tick()
+    const backedOff = listQueueItems(db, T, 'draft').find(i => Date.parse(i.scheduledAt!) > h.clock.now())!
+    expect(backedOff).toBeTruthy()
+    expect(JSON.parse(backedOff.contextJson!).claudeFailures).toBe(1)
+    await h.loop.tick() // immediately after: not due → no new attempt, no crash
+
+    // failures 2 and 3 (15-min backoffs) → slot expires instead of burning calls forever
+    h.clock.advance(16 * 60_000); await h.loop.tick()
+    h.clock.advance(16 * 60_000); await h.loop.tick()
+    const dead = listQueueItems(db, T, 'expired').find(i => i.id === backedOff.id)!
+    expect(dead.decisionReason).toMatch(/drafting failed 3×/)
+    expect(h.demo.published).toHaveLength(0)
+  })
+
+  it('/draft during a Claude outage reports the failure instead of going silent', async () => {
+    const flakyClaude = { complete: async () => { throw new Error('Claude upstream timeout') } }
+    const h = makeHarness(dir, { claude: flakyClaude }); db = h.db
+    h.pushUpdate({ update_id: 1, message: { chat: { id: 42 }, text: '/draft anything' } })
+    await h.loop.tick()
+    expect(h.tgSent.some(s => String(s.params.text ?? '').includes('draft failed: Claude upstream timeout'))).toBe(true)
+  })
+
   it('warm-up mode: no replies drafted even when mentions arrive', async () => {
     const h = makeHarness(dir); db = h.db
     setSetting(db, T, 'warmup_until', '2026-08-01T00:00:00.000Z', new Date(h.clock.now()).toISOString())

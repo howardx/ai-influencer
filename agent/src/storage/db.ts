@@ -321,6 +321,14 @@ export function setQueueItemSchedule(db: Db, tenant: Tenant, id: string, schedul
   ).run(scheduledAtIso, id, tenant.personaId, tenant.ownerId)
 }
 
+/** Update an item's context blob (e.g. drafting retry counter). */
+export function setQueueItemContext(db: Db, tenant: Tenant, id: string, contextJson: string): void {
+  db.prepare(
+    `UPDATE queue_items SET context_json = ?
+     WHERE id = ? AND persona_id = ? AND owner_id = ?`
+  ).run(contextJson, id, tenant.personaId, tenant.ownerId)
+}
+
 /** Fill in a lazily-drafted original's text at slot time. */
 export function setQueueItemDraftText(db: Db, tenant: Tenant, id: string, text: string): void {
   db.prepare(

@@ -8,7 +8,7 @@ import type { Db, Tenant } from '../storage/db'
 import {
   expireOverdueQueueItems, listDueQueueItems, listRecentPosts, getArcState,
   transitionQueueItem, setQueueItemDraftText, setQueueItemSchedule,
-  getSetting, setSetting, recordActionCost, insertPost,
+  setQueueItemContext, getSetting, setSetting, recordActionCost, insertPost,
 } from '../storage/db'
 import type { SoulSheet } from './soul'
 import type { ClaudeClient } from './claude'
@@ -94,8 +94,10 @@ export class AgentLoop {
           `approved awaiting publish: ${pending}`,
         ].filter(Boolean).join('\n')
       },
-      onPostVerbatim: text => this.postVerbatim(text),
-      onDraft: hint => this.draftToCard(hint),
+      // .catch: a Claude/adapter error must come back as a chat message, not
+      // vanish into the handler-error log while the owner waits
+      onPostVerbatim: text => this.postVerbatim(text).catch(e => `post failed: ${(e as Error).message}`),
+      onDraft: hint => this.draftToCard(hint).catch(e => `draft failed: ${(e as Error).message}`),
     }
   }
 
@@ -249,9 +251,31 @@ export class AgentLoop {
       recentTextsForDedup: listRecentPosts(db, this.tenant, 50).map(p => p.text),
     }
     for (const item of due) {
-      const pillarName = item.contextJson ? (JSON.parse(item.contextJson) as { pillar?: string }).pillar : undefined
-      const pillar = sheet.contentPillars.find(p => p.name === pillarName) ?? sheet.contentPillars[0]
-      const result = await draftWithCritic(claude, sheet, pillar, ctx, 'original', undefined, log)
+      const context = item.contextJson
+        ? (JSON.parse(item.contextJson) as { pillar?: string; claudeFailures?: number })
+        : {}
+      const pillar = sheet.contentPillars.find(p => p.name === context.pillar) ?? sheet.contentPillars[0]
+
+      let result
+      try {
+        result = await draftWithCritic(claude, sheet, pillar, ctx, 'original', undefined, log)
+      } catch (e) {
+        // Claude outage must not crash the tick, and MUST not retry every 30s
+        // (an overnight tunnel flap once re-drafted one slot ~10 times — paid
+        // calls each). Back off 15 min; three strikes and the slot drops.
+        const failures = (context.claudeFailures ?? 0) + 1
+        if (failures >= 3) {
+          transitionQueueItem(db, this.tenant, item.id, 'draft', 'expired', {
+            reason: `drafting failed ${failures}×: ${(e as Error).message}`,
+          })
+          log(`slot dropped after ${failures} Claude failures (${pillar.name}) — silence over spend`)
+        } else {
+          setQueueItemContext(db, this.tenant, item.id, JSON.stringify({ ...context, claudeFailures: failures }))
+          setQueueItemSchedule(db, this.tenant, item.id, new Date(this.d.now() + 15 * 60_000).toISOString())
+          log(`draft errored (${(e as Error).message}) — retry ${failures}/3 in 15 min`)
+        }
+        continue
+      }
       recordActionCost(db, this.tenant, 'claude.draft', 0, this.nowIso())
 
       if (!result.text) {
@@ -293,7 +317,15 @@ export class AgentLoop {
       recentTextsForDedup: [],
     }
     for (const mention of page.mentions.slice(0, MAX_REPLY_DRAFTS_PER_POLL)) {
-      const result = await draftReplyWithCritic(claude, sheet, ctx, mention)
+      let result
+      try {
+        result = await draftReplyWithCritic(claude, sheet, ctx, mention)
+      } catch (e) {
+        // cursor already advanced — this mention is skipped, not retried.
+        // An unanswered mention is always safe; a crash-looping tick isn't.
+        log(`reply draft errored for @${mention.authorHandle}: ${(e as Error).message} — mention skipped`)
+        continue
+      }
       if (!result.text) {
         log(`mention from @${mention.authorHandle} skipped: ${result.droppedBecause}`)
         continue
